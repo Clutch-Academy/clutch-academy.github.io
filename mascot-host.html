@@ -265,15 +265,29 @@ summary{cursor:pointer;color:var(--muted);font-size:.86rem;font-weight:600;paddi
   function serverNow() { return Date.now() + offset; }
 
   function poll() {
-    if (inFlight || !API) return;
+    if (inFlight || !API) return Promise.resolve();
     inFlight = true;
-    call({ action: 'state', hostKey: KEY })
+    return call({ action: 'state', hostKey: KEY })
       .then(function (s) {
         if (s && s.ok) { offset = s.serverNow - Date.now(); S = s; render(); }
       })
       .catch(function () {})
       .then(function () { inFlight = false; });
   }
+
+  // Ask again as soon as the last answer lands, rather than on a fixed clock.
+  function gap() {
+    if (!S) return 1200;
+    switch (S.stage) {
+      case 'lobby':      return 1200;   // watching people arrive
+      case 'submitting': return 1500;   // watching the submission count
+      case 'voting':
+      case 'runoff':     return 1500;   // watching the vote count
+      case 'results':    return 6000;
+      default:           return 2000;
+    }
+  }
+  function loop() { poll().then(function () { setTimeout(loop, gap()); }); }
 
   function act(action, extra) {
     var p = { action: action, hostKey: KEY };
@@ -522,9 +536,8 @@ summary{cursor:pointer;color:var(--muted);font-size:.86rem;font-weight:600;paddi
   if (API && KEY) {
     el('setup').classList.add('hide');
     el('main').classList.remove('hide');
-    poll();
   }
-  setInterval(poll, 2000);
+  loop();
   document.addEventListener('visibilitychange', function () { if (!document.hidden) poll(); });
 })();
 </script>

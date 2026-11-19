@@ -16,7 +16,7 @@ var FIXED_PIN      = '1234';
 var FIXED_HOST_KEY = 'Clutch123';
 
 var SUBMIT_GRACE_MS = 2500;   // accept submits this long after the deadline (round-trip slack)
-var CACHE_SECONDS   = 2;      // shared state snapshot cache
+var CACHE_SECONDS   = 5;      // cached snapshot; every write clears it, so this stays correct
 var LOCK_MS         = 15000;
 var MAX_NAME_LEN    = 60;
 var MAX_NICK_LEN    = 24;
@@ -146,7 +146,12 @@ function saveGame(g) {
   bust();
 }
 
-function bust() { try { CacheService.getScriptCache().remove('shared'); } catch (e) {} }
+function bust() {
+  var c;
+  try { c = CacheService.getScriptCache(); } catch (e) { return; }
+  try { c.remove('shared'); } catch (e) {}
+  try { c.remove('round'); } catch (e) {}
+}
 
 function makeToken(len) {
   var abc = 'abcdefghijkmnpqrstuvwxyz23456789', s = '';
@@ -181,19 +186,54 @@ function maybeAdvance(g) {
   });
 }
 
+/* ------------------------------------------------------------- round data */
+
+/**
+ * The round's rows, read from the Sheet at most once per cache window.
+ * Reading Players/Entries/Votes per request was costing six Sheet round trips
+ * on every poll from every phone, which is what made the game feel laggy.
+ */
+function roundData(round) {
+  var cache = CacheService.getScriptCache();
+  var hit = cache.get('round');
+  if (hit) {
+    try {
+      var d = JSON.parse(hit);
+      if (Number(d.round) === Number(round)) return d;
+    } catch (e) {}
+  }
+  var d = {
+    round: round,
+    players: rows('Players').filter(function (r) { return Number(r.round) === round; }),
+    entries: rows('Entries').filter(function (r) { return Number(r.round) === round; }),
+    votes:   rows('Votes').filter(function (r) { return Number(r.round) === round; })
+  };
+  // Dates don't survive JSON and nothing downstream reads them.
+  try { cache.put('round', JSON.stringify(d), CACHE_SECONDS); } catch (e) {}
+  return d;
+}
+
 /* ------------------------------------------------------------- shared state */
 
 /** The part of the state that is the same for everybody (cached). */
 function sharedState() {
   var cache = CacheService.getScriptCache();
   var hit = cache.get('shared');
-  if (hit) { try { return JSON.parse(hit); } catch (e) {} }
+  if (hit) {
+    try {
+      var cached = JSON.parse(hit);
+      // Never serve a cached "submitting" whose deadline has passed, or the room
+      // would sit on a finished clock until the cache happened to expire.
+      var stale = cached.stage === 'submitting' && cached.deadline &&
+                  Date.now() > cached.deadline + SUBMIT_GRACE_MS;
+      if (!stale) return cached;
+    } catch (e) {}
+  }
 
   var g = maybeAdvance(game());
   var round = g.round;
-  var players = rows('Players').filter(function (r) { return Number(r.round) === round; });
-  var entries = rows('Entries').filter(function (r) { return Number(r.round) === round; });
-  var votes   = rows('Votes').filter(function (r) { return Number(r.round) === round; });
+  var data = roundData(round);
+  var players = data.players, entries = data.entries, votes = data.votes;
 
   var phase = (g.stage === 'runoff') ? 'runoff' : 'main';
   var phaseVotes = votes.filter(function (v) { return String(v.phase) === phase; });
@@ -289,18 +329,14 @@ function apiState(p) {
 
   var token = String(p.token || '');
   s.me = null;
+  var data = roundData(s.round);        // cached: no extra Sheet reads per poll
   if (token) {
-    var round = s.round;
-    var me = rows('Players').filter(function (r) {
-      return Number(r.round) === round && String(r.token) === token;
-    })[0];
+    var me = data.players.filter(function (r) { return String(r.token) === token; })[0];
     if (me) {
-      var myEntry = rows('Entries').filter(function (e) {
-        return Number(e.round) === round && String(e.token) === token;
-      })[0];
+      var myEntry = data.entries.filter(function (e) { return String(e.token) === token; })[0];
       var phase = (s.stage === 'runoff') ? 'runoff' : 'main';
-      var myVote = rows('Votes').filter(function (v) {
-        return Number(v.round) === round && String(v.token) === token && String(v.phase) === phase;
+      var myVote = data.votes.filter(function (v) {
+        return String(v.token) === token && String(v.phase) === phase;
       })[0];
       s.me = {
         nickname: String(me.nickname),
@@ -320,11 +356,8 @@ function apiState(p) {
   // The presenter sees who is in the room; players never do.
   if (isHost(p)) {
     s.host = true;
-    s.pin = String(game().pin);
-    var r2 = s.round;
-    s.players = rows('Players')
-      .filter(function (r) { return Number(r.round) === r2; })
-      .map(function (r) { return String(r.nickname); });
+    s.pin = FIXED_PIN;
+    s.players = data.players.map(function (r) { return String(r.nickname); });
     s.hostKey = undefined;
   }
   return s;

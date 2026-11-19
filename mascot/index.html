@@ -259,15 +259,31 @@ input::placeholder{color:#B9A9B2;font-weight:400}
   function serverNow() { return Date.now() + offset; }
 
   function poll() {
-    if (inFlight || !API) return;
+    if (inFlight || !API) return Promise.resolve();
     inFlight = true;
-    call({ action: 'state', token: TOKEN })
+    return call({ action: 'state', token: TOKEN })
       .then(function (s) {
         if (s && s.ok) { offset = s.serverNow - Date.now(); S = s; render(); }
       })
       .catch(function () { /* a dropped poll is fine; the next one catches up */ })
       .then(function () { inFlight = false; });
   }
+
+  // How long to wait AFTER an answer lands before asking again. Apps Script
+  // round trips run 2-8s, so a fixed interval just stacks waiting on waiting.
+  // Poll hard only where the player is waiting on someone else.
+  function gap() {
+    if (!S) return 800;
+    switch (S.stage) {
+      case 'lobby':      return 800;    // waiting for the host to start
+      case 'submitting': return 3000;   // the countdown runs locally; nothing to learn
+      case 'voting':
+      case 'runoff':     return (S.me && S.me.hasVoted) ? 1500 : 3000;
+      case 'results':    return 6000;
+      default:           return 2000;
+    }
+  }
+  function loop() { poll().then(function () { setTimeout(loop, gap()); }); }
 
   /* ------------------------------------------------------- the mascot --- */
   function loadMascot(v) {
@@ -501,8 +517,7 @@ input::placeholder{color:#B9A9B2;font-weight:400}
   if (qsPin) el('pin').value = String(qsPin).slice(0, 4);
   show(TOKEN ? 's-lobby' : 's-join');
 
-  poll();
-  setInterval(poll, 2000);
+  loop();
   // A phone that slept or switched apps catches up the moment it comes back.
   document.addEventListener('visibilitychange', function () { if (!document.hidden) poll(); });
   window.addEventListener('focus', poll);

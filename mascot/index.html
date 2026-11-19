@@ -1,0 +1,512 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<meta name="description" content="Name the mascot — join the live game from the Clutch L&D workshop.">
+<meta name="color-scheme" content="light">
+<meta name="robots" content="noindex">
+<title>Name the Mascot</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Poppins:wght@400;500;600;700&display=swap">
+<style>
+/* Clutch brand: lavender canvas, white panels, plum type, Clutch Red for the one thing
+   you're meant to tap. Built thumb-first — every control sits in the lower half. */
+:root{
+  --lavender:#F1EDF8; --white:#FFFFFF; --plum:#550E30; --red:#FF464C;
+  --red-2:#F43535; --red-3:#DF0C00; --ink:#191919; --line:#DCDCDC;
+  --grey-1:#F3F3F3; --muted:#6B5A63;
+  color-scheme:light;
+}
+*{box-sizing:border-box;-webkit-tap-highlight-color:transparent}
+html,body{margin:0;height:100%}
+body{
+  background:var(--lavender);color:var(--ink);
+  font-family:'Circular','Poppins',Helvetica,Arial,sans-serif;
+  font-size:17px;line-height:1.45;
+  padding:max(14px,env(safe-area-inset-top,0px)) max(14px,env(safe-area-inset-right,0px))
+          max(14px,env(safe-area-inset-bottom,0px)) max(14px,env(safe-area-inset-left,0px));
+  display:flex;flex-direction:column;align-items:center;
+}
+.wrap{width:100%;max-width:520px;margin:0 auto;flex:1;display:flex;flex-direction:column}
+header{text-align:center;padding:10px 0 14px}
+.eyebrow{display:inline-block;background:var(--red);color:#fff;font-size:.66rem;font-weight:700;
+  letter-spacing:.1em;text-transform:uppercase;padding:5px 13px;border-radius:999px}
+h1{font-size:clamp(1.5rem,7vw,2rem);margin:10px 0 0;color:var(--plum);font-weight:700;line-height:1.1}
+.sub{color:var(--muted);font-size:.93rem;margin:6px 0 0}
+.card{background:var(--white);border:1px solid var(--line);border-radius:18px;padding:22px;margin-bottom:14px}
+.card h2{margin:0 0 4px;color:var(--plum);font-size:1.18rem;font-weight:700;line-height:1.2}
+.card p{margin:0 0 16px;color:var(--muted);font-size:.93rem}
+label{display:block;font-weight:600;color:var(--plum);font-size:.86rem;margin:0 0 6px}
+input[type=text],input[type=tel]{
+  width:100%;font:inherit;font-size:17px;padding:14px 15px;border:1.5px solid var(--line);
+  border-radius:12px;background:var(--white);color:var(--plum);font-weight:500}
+input:focus{outline:none;border-color:var(--red);box-shadow:0 0 0 3px rgba(255,70,76,.16)}
+input::placeholder{color:#B9A9B2;font-weight:400}
+.btn{display:block;width:100%;font:inherit;font-weight:700;font-size:1.02rem;padding:16px;border:0;
+  border-radius:12px;background:var(--red);color:#fff;cursor:pointer;margin-top:14px}
+.btn:active{background:var(--red-3)}
+.btn[disabled]{background:var(--line);color:#8C8C8C;cursor:default}
+.btn.ghost{background:transparent;color:var(--plum);border:1.5px solid var(--line);font-weight:600}
+.pin-row{display:flex;gap:10px}
+.pin-row>div:first-child{flex:1}
+.pin-row>div:last-child{width:120px}
+.msg{margin-top:12px;padding:11px 13px;border-radius:10px;font-size:.9rem;font-weight:600;display:none}
+.msg.err{display:block;background:#ffebee;color:var(--red-3)}
+.msg.good{display:block;background:#e8f5e9;color:#2e7d32}
+/* Mascot */
+.mascot{background:var(--grey-1);border-radius:14px;overflow:hidden;margin:0 0 16px;
+  display:flex;align-items:center;justify-content:center;min-height:120px}
+.mascot img{display:block;width:100%;height:auto;max-height:42vh;object-fit:contain}
+.mascot .ph{color:var(--muted);font-size:.85rem;padding:28px 14px;text-align:center}
+/* Timer */
+.timer{display:flex;align-items:baseline;justify-content:center;gap:9px;margin:0 0 4px}
+.timer .n{font-size:3.4rem;font-weight:700;line-height:1;color:var(--plum);font-variant-numeric:tabular-nums}
+.timer.low .n{color:var(--red-3)}
+.timer .u{font-size:.8rem;font-weight:600;color:var(--muted);text-transform:uppercase;letter-spacing:.08em}
+.bar{height:7px;background:var(--grey-1);border-radius:999px;overflow:hidden;margin:10px 0 18px}
+.bar i{display:block;height:100%;background:linear-gradient(to right,#FF464C,#DF0C00);width:100%;
+  border-radius:999px;transition:width .25s linear}
+/* Ballot */
+.ballot{display:flex;flex-direction:column;gap:10px;margin:0 0 4px}
+.opt{display:flex;align-items:center;gap:12px;width:100%;text-align:left;font:inherit;font-size:1.02rem;
+  font-weight:600;color:var(--plum);background:var(--white);border:1.5px solid var(--line);
+  border-radius:13px;padding:15px 16px;cursor:pointer;line-height:1.3}
+.opt:active{border-color:var(--red)}
+.opt .tick{flex:0 0 22px;width:22px;height:22px;border-radius:50%;border:2px solid var(--line);
+  display:flex;align-items:center;justify-content:center;font-size:13px;color:#fff;font-weight:700}
+.opt.chosen{border-color:var(--red);background:#FFF5F5}
+.opt.chosen .tick{background:var(--red);border-color:var(--red)}
+.opt.own{opacity:.5;cursor:default;background:var(--grey-1)}
+.opt.own .yours{margin-left:auto;font-size:.68rem;font-weight:700;letter-spacing:.07em;
+  text-transform:uppercase;color:var(--muted);flex:0 0 auto}
+.opt[disabled]{cursor:default}
+/* Results */
+.winner{background:linear-gradient(to bottom,#FF464C,#DF0C00);border-radius:18px;padding:30px 22px;
+  text-align:center;color:#fff;margin-bottom:14px}
+.winner .label{font-size:.7rem;font-weight:700;letter-spacing:.12em;text-transform:uppercase;opacity:.92}
+.winner .name{font-size:clamp(1.6rem,8vw,2.3rem);font-weight:700;line-height:1.14;margin:12px 0 10px;
+  overflow-wrap:anywhere}
+.winner .by{font-size:.95rem;font-weight:600;opacity:.95}
+.winner .votes{display:inline-block;margin-top:14px;background:rgba(255,255,255,.22);
+  padding:7px 15px;border-radius:999px;font-size:.85rem;font-weight:700}
+.you-won{background:var(--plum);color:#fff;border-radius:14px;padding:16px;text-align:center;
+  font-weight:700;margin-bottom:14px}
+.rank{display:flex;align-items:center;gap:11px;padding:11px 0;border-bottom:1px solid var(--line);font-size:.95rem}
+.rank:last-child{border-bottom:0}
+.rank .pos{flex:0 0 26px;font-weight:700;color:var(--muted);font-size:.85rem}
+.rank .t{flex:1;color:var(--plum);font-weight:600;overflow-wrap:anywhere}
+.rank .v{flex:0 0 auto;font-weight:700;color:var(--red-3);font-size:.9rem}
+.dots{display:flex;gap:6px;justify-content:center;margin-top:16px}
+.dots i{width:8px;height:8px;border-radius:50%;background:var(--red);opacity:.3;animation:p 1.3s infinite}
+.dots i:nth-child(2){animation-delay:.18s}.dots i:nth-child(3){animation-delay:.36s}
+@keyframes p{0%,100%{opacity:.25;transform:scale(.85)}50%{opacity:1;transform:scale(1)}}
+.foot{text-align:center;color:var(--muted);font-size:.76rem;padding:8px 0 14px}
+.badge{display:inline-block;background:var(--lavender);color:var(--plum);font-size:.76rem;font-weight:700;
+  padding:5px 12px;border-radius:999px;margin-bottom:12px}
+.hide{display:none!important}
+@media (prefers-reduced-motion:reduce){*{animation:none!important;transition:none!important}}
+</style>
+</head>
+<body>
+<div class="wrap">
+  <header>
+    <span class="eyebrow">Live game</span>
+    <h1>Name the mascot</h1>
+    <p class="sub" id="sub">Pick a name. Then pick a winner.</p>
+  </header>
+
+  <!-- no API configured -->
+  <section id="s-setup" class="card hide">
+    <h2>This link is missing its game address</h2>
+    <p>Scan the QR code on the presenter's screen instead — that link carries everything this page needs.</p>
+  </section>
+
+  <!-- join -->
+  <section id="s-join" class="card hide">
+    <h2>Join the game</h2>
+    <p>Your name is only ever shown to the presenter, never to the room.</p>
+    <div class="pin-row">
+      <div>
+        <label for="nick">Your name</label>
+        <input id="nick" type="text" maxlength="24" autocomplete="nickname"
+               autocapitalize="words" placeholder="e.g. Arun">
+      </div>
+      <div>
+        <label for="pin">Game PIN</label>
+        <input id="pin" type="tel" inputmode="numeric" maxlength="4" pattern="[0-9]*" placeholder="0000">
+      </div>
+    </div>
+    <button class="btn" id="joinBtn">Join</button>
+    <div class="msg" id="joinMsg"></div>
+  </section>
+
+  <!-- waiting room -->
+  <section id="s-lobby" class="card hide">
+    <span class="badge" id="lobbyWho">You're in</span>
+    <h2>You're in. Hang tight.</h2>
+    <p id="lobbyCount">Waiting for the presenter to start the round.</p>
+    <div class="dots"><i></i><i></i><i></i></div>
+  </section>
+
+  <!-- submit -->
+  <section id="s-submit" class="card hide">
+    <div class="timer" id="subTimer"><span class="n" id="subN">60</span><span class="u">seconds left</span></div>
+    <div class="bar"><i id="subBar"></i></div>
+    <div class="mascot" id="mascot1"><div class="ph">The mascot will appear here</div></div>
+    <h2>Name this mascot</h2>
+    <p>Funniest, cleverest, most ridiculous — your call. You can change it until the clock runs out.</p>
+    <label for="entry">Your mascot name</label>
+    <input id="entry" type="text" maxlength="60" autocapitalize="words" placeholder="e.g. Sir Loins of Beef">
+    <button class="btn" id="subBtn">Submit</button>
+    <div class="msg" id="subMsg"></div>
+  </section>
+
+  <!-- submitted, waiting for voting -->
+  <section id="s-submitted" class="card hide">
+    <span class="badge">Locked in</span>
+    <h2 id="lockedName">Your name is in</h2>
+    <p>Voting opens when the clock runs out.</p>
+    <div class="dots"><i></i><i></i><i></i></div>
+  </section>
+
+  <!-- vote -->
+  <section id="s-vote" class="card hide">
+    <h2 id="voteTitle">Vote for your favourite</h2>
+    <p id="voteHint">One vote each. You can't vote for your own, and nobody sees who voted for what.</p>
+    <div class="ballot" id="ballot"></div>
+    <div class="msg" id="voteMsg"></div>
+  </section>
+
+  <!-- voted -->
+  <section id="s-voted" class="card hide">
+    <span class="badge">Vote counted</span>
+    <h2>Thanks — your vote is in</h2>
+    <p id="votedCount">Waiting for everyone else.</p>
+    <div class="dots"><i></i><i></i><i></i></div>
+  </section>
+
+  <!-- results -->
+  <section id="s-results" class="hide">
+    <div id="youWon" class="you-won hide">That's your name up there. Nice.</div>
+    <div class="winner" id="winnerBox">
+      <div class="label">Winning mascot name</div>
+      <div class="name" id="wName">—</div>
+      <div class="by" id="wBy"></div>
+      <div class="votes" id="wVotes"></div>
+    </div>
+    <div class="card">
+      <h2>Full results</h2>
+      <p id="resNote">Every name, most votes first.</p>
+      <div id="ranks"></div>
+    </div>
+  </section>
+
+  <div class="foot" id="foot"></div>
+</div>
+
+<script>
+(function () {
+  'use strict';
+
+  /* ---------------------------------------------------------- config ---- */
+  // The QR carries ?api= (and ?pin=). We stash the address so a refresh still works.
+  var qs = new URLSearchParams(location.search);
+  var API = qs.get('api') || '';
+  var sid = qs.get('s') || '';
+  // Short form: just the Apps Script deployment id, which keeps the QR sparse.
+  if (!API && /^[A-Za-z0-9_-]{20,}$/.test(sid)) {
+    API = 'https://script.google.com/macros/s/' + sid + '/exec';
+  }
+  if (API) { try { localStorage.setItem('mascotApi', API); } catch (e) {} }
+  if (!API) { try { API = localStorage.getItem('mascotApi') || ''; } catch (e) {} }
+  if (!API && window.MASCOT_API) API = window.MASCOT_API;
+
+  var TOKEN = '';
+  try { TOKEN = localStorage.getItem('mascotToken') || ''; } catch (e) {}
+
+  var el = function (id) { return document.getElementById(id); };
+  var screens = ['s-setup', 's-join', 's-lobby', 's-submit', 's-submitted', 's-vote', 's-voted', 's-results'];
+  function show(id) {
+    screens.forEach(function (s) { el(s).classList.toggle('hide', s !== id); });
+  }
+  function note(node, text, kind) {
+    node.className = 'msg' + (text ? ' ' + (kind || 'err') : '');
+    node.textContent = text || '';
+  }
+
+  /* ------------------------------------------------------------ api ----- */
+  // No Content-Type header on purpose: that keeps it a "simple" CORS request,
+  // so the browser never sends a preflight that Apps Script cannot answer.
+  function call(payload) {
+    return fetch(API, {
+      method: 'POST',
+      redirect: 'follow',
+      body: JSON.stringify(payload)
+    }).then(function (r) { return r.json(); });
+  }
+
+  /* ----------------------------------------------------------- state ---- */
+  var S = null;             // last state from the server
+  var offset = 0;           // serverNow - Date.now(), so the clock can't be fiddled with
+  var inFlight = false;
+  var imgVersion = -1;
+  var lastStage = '';
+  var pendingText = null;   // what the player typed but hasn't saved
+  var typingUntil = 0;
+
+  function serverNow() { return Date.now() + offset; }
+
+  function poll() {
+    if (inFlight || !API) return;
+    inFlight = true;
+    call({ action: 'state', token: TOKEN })
+      .then(function (s) {
+        if (s && s.ok) { offset = s.serverNow - Date.now(); S = s; render(); }
+      })
+      .catch(function () { /* a dropped poll is fine; the next one catches up */ })
+      .then(function () { inFlight = false; });
+  }
+
+  /* ------------------------------------------------------- the mascot --- */
+  function loadMascot(v) {
+    if (!v || v === imgVersion) return;
+    imgVersion = v;
+    call({ action: 'image', version: v }).then(function (r) {
+      if (!r || !r.ok || !r.dataUrl) return;
+      var box = el('mascot1');
+      box.innerHTML = '';
+      var img = new Image();
+      img.alt = 'The mascot you are naming';
+      img.src = r.dataUrl;
+      box.appendChild(img);
+    }).catch(function () {});
+  }
+
+  /* ---------------------------------------------------------- render ---- */
+  function render() {
+    if (!S) return;
+    var stage = S.stage;
+    var me = S.me;
+
+    if (S.imageVersion) loadMascot(S.imageVersion);
+
+    if (!me) {                       // not joined (or the round was restarted)
+      if (TOKEN && lastStage) {      // we were in and got reset
+        TOKEN = '';
+        try { localStorage.removeItem('mascotToken'); } catch (e) {}
+      }
+      show('s-join');
+      el('sub').textContent = stage === 'lobby'
+        ? 'Pick a name. Then pick a winner.'
+        : 'This round is already running.';
+      lastStage = stage;
+      return;
+    }
+
+    el('lobbyWho').textContent = 'Playing as ' + me.nickname;
+
+    if (stage === 'lobby') {
+      show('s-lobby');
+      el('lobbyCount').textContent = S.playerCount === 1
+        ? "You're the first one here."
+        : S.playerCount + ' people have joined so far.';
+    } else if (stage === 'submitting') {
+      show('s-submit');
+      tick();
+      if (pendingText === null && document.activeElement !== el('entry')) {
+        el('entry').value = me.myText || '';
+      }
+      el('subBtn').textContent = me.hasSubmitted ? 'Update my name' : 'Submit';
+    } else if (stage === 'voting' || stage === 'runoff') {
+      if (me.hasVoted) {
+        show('s-voted');
+        el('votedCount').textContent = S.voteCount + ' of ' + S.playerCount + ' votes are in.';
+      } else {
+        show('s-vote');
+        drawBallot();
+      }
+      el('voteTitle').textContent = stage === 'runoff' ? "It's a tie — vote again" : 'Vote for your favourite';
+      el('voteHint').textContent = stage === 'runoff'
+        ? 'These names finished level. One of them has to win.'
+        : "One vote each. You can't vote for your own, and nobody sees who voted for what.";
+    } else if (stage === 'results') {
+      show('s-results');
+      drawResults();
+    }
+    lastStage = stage;
+  }
+
+  /* --------------------------------------------------------- the clock -- */
+  function tick() {
+    if (!S || S.stage !== 'submitting' || !S.deadline) return;
+    var left = Math.max(0, S.deadline - serverNow());
+    var secs = Math.ceil(left / 1000);
+    el('subN').textContent = secs;
+    el('subTimer').classList.toggle('low', secs <= 10);
+    var total = (S.submitSeconds || 60) * 1000;
+    el('subBar').style.width = Math.max(0, Math.min(100, (left / total) * 100)) + '%';
+    var dead = left <= 0;
+    el('entry').disabled = dead;
+    el('subBtn').disabled = dead;
+    if (dead) el('subBtn').textContent = "Time's up";
+  }
+  setInterval(function () { if (S && S.stage === 'submitting') tick(); }, 200);
+
+  /* ----------------------------------------------------------- ballot --- */
+  function drawBallot() {
+    var box = el('ballot');
+    var sig = (S.entries || []).map(function (e) { return e.id; }).join('|') + '/' + S.stage;
+    if (box.dataset.sig === sig) return;      // don't rebuild under the player's thumb
+    box.dataset.sig = sig;
+    box.innerHTML = '';
+    (S.entries || []).forEach(function (e) {
+      var b = document.createElement('button');
+      b.className = 'opt' + (e.mine ? ' own' : '');
+      b.type = 'button';
+      var tick = document.createElement('span');
+      tick.className = 'tick';
+      tick.textContent = '✓';
+      b.appendChild(tick);
+      var t = document.createElement('span');
+      t.textContent = e.text;
+      b.appendChild(t);
+      if (e.mine) {
+        b.disabled = true;
+        var y = document.createElement('span');
+        y.className = 'yours';
+        y.textContent = 'Yours';
+        b.appendChild(y);
+      } else {
+        b.addEventListener('click', function () { castVote(e.id, b); });
+      }
+      box.appendChild(b);
+    });
+    if (!(S.entries || []).length) {
+      var p = document.createElement('p');
+      p.textContent = 'No names were submitted this round.';
+      box.appendChild(p);
+    }
+  }
+
+  var voting = false;
+  function castVote(id, btn) {
+    if (voting) return;
+    voting = true;
+    Array.prototype.forEach.call(el('ballot').children, function (c) { c.classList.remove('chosen'); });
+    btn.classList.add('chosen');
+    note(el('voteMsg'), '');
+    call({ action: 'vote', token: TOKEN, entryId: id })
+      .then(function (r) {
+        if (r && r.ok) { poll(); }
+        else { btn.classList.remove('chosen'); note(el('voteMsg'), (r && r.error) || 'That did not go through'); poll(); }
+      })
+      .catch(function () {
+        btn.classList.remove('chosen');
+        note(el('voteMsg'), 'Connection hiccup — tap again');
+      })
+      .then(function () { voting = false; });
+  }
+
+  /* ---------------------------------------------------------- results --- */
+  function drawResults() {
+    var w = S.winner;
+    if (!w) {
+      el('winnerBox').classList.add('hide');
+      el('resNote').textContent = 'Nobody submitted a name this round.';
+      el('ranks').innerHTML = '';
+      return;
+    }
+    el('winnerBox').classList.remove('hide');
+    el('wName').textContent = w.text;
+    el('wBy').textContent = 'Submitted by ' + w.nickname;
+    var n = (w.decidedBy === 'runoff') ? w.runoffVotes : w.votes;
+    el('wVotes').textContent = n + (n === 1 ? ' vote' : ' votes')
+      + (w.decidedBy === 'runoff' ? ' in the runoff' : '')
+      + (w.decidedBy === 'coin-toss' ? ' · tie broken at random' : '');
+    el('youWon').classList.toggle('hide', !(S.me && S.me.nickname === w.nickname));
+
+    var box = el('ranks');
+    box.innerHTML = '';
+    (S.results || []).forEach(function (r, i) {
+      var row = document.createElement('div');
+      row.className = 'rank';
+      var pos = document.createElement('span'); pos.className = 'pos'; pos.textContent = (i + 1);
+      var t = document.createElement('span'); t.className = 't'; t.textContent = r.text;
+      var v = document.createElement('span'); v.className = 'v';
+      var c = (w.decidedBy === 'runoff' && r.runoffVotes) ? r.runoffVotes : r.votes;
+      v.textContent = c;
+      row.appendChild(pos); row.appendChild(t); row.appendChild(v);
+      box.appendChild(row);
+    });
+  }
+
+  /* ------------------------------------------------------------ join ---- */
+  el('joinBtn').addEventListener('click', function () {
+    var nick = el('nick').value.trim();
+    var pin = el('pin').value.trim();
+    if (!nick) { note(el('joinMsg'), 'Enter your name first'); return; }
+    if (!/^\d{4}$/.test(pin)) { note(el('joinMsg'), 'The PIN is four digits'); return; }
+    el('joinBtn').disabled = true;
+    el('joinBtn').textContent = 'Joining…';
+    call({ action: 'join', nickname: nick, pin: pin })
+      .then(function (r) {
+        if (r && r.ok) {
+          TOKEN = r.token;
+          try { localStorage.setItem('mascotToken', TOKEN); } catch (e) {}
+          note(el('joinMsg'), '');
+          poll();
+        } else {
+          note(el('joinMsg'), r && r.error === 'bad_pin' ? "That PIN doesn't match the screen" : (r && r.error) || 'Could not join');
+        }
+      })
+      .catch(function () { note(el('joinMsg'), 'No connection — check the wifi and try again'); })
+      .then(function () {
+        el('joinBtn').disabled = false;
+        el('joinBtn').textContent = 'Join';
+      });
+  });
+  el('pin').addEventListener('keydown', function (e) { if (e.key === 'Enter') el('joinBtn').click(); });
+  el('nick').addEventListener('keydown', function (e) { if (e.key === 'Enter') el('pin').focus(); });
+
+  /* ---------------------------------------------------------- submit ---- */
+  el('entry').addEventListener('input', function () {
+    pendingText = el('entry').value;
+    typingUntil = Date.now() + 4000;
+  });
+  el('subBtn').addEventListener('click', function () {
+    var text = el('entry').value.trim();
+    if (!text) { note(el('subMsg'), 'Type a name first'); return; }
+    el('subBtn').disabled = true;
+    call({ action: 'submit', token: TOKEN, text: text })
+      .then(function (r) {
+        if (r && r.ok) {
+          pendingText = null;
+          note(el('subMsg'), 'Saved. Change it any time before the clock runs out.', 'good');
+          poll();
+        } else {
+          note(el('subMsg'), (r && r.error) || 'Could not save that');
+          poll();
+        }
+      })
+      .catch(function () { note(el('subMsg'), 'No connection — try once more'); })
+      .then(function () { el('subBtn').disabled = false; });
+  });
+  el('entry').addEventListener('keydown', function (e) { if (e.key === 'Enter') el('subBtn').click(); });
+
+  /* ------------------------------------------------------------ boot ---- */
+  if (!API) { show('s-setup'); return; }
+  var qsPin = qs.get('pin');
+  if (qsPin) el('pin').value = String(qsPin).slice(0, 4);
+  show(TOKEN ? 's-lobby' : 's-join');
+
+  poll();
+  setInterval(poll, 2000);
+  // A phone that slept or switched apps catches up the moment it comes back.
+  document.addEventListener('visibilitychange', function () { if (!document.hidden) poll(); });
+  window.addEventListener('focus', poll);
+})();
+</script>
+</body>
+</html>

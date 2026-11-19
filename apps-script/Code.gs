@@ -9,6 +9,12 @@
  * The Sheet this is bound to is the database. Four tabs are created automatically.
  */
 
+// Fixed so you always know them and never have to look them up.
+// Anyone who gets hold of the web app URL could guess these and drive the game,
+// which is fine for a room of colleagues but don't reuse them for anything else.
+var FIXED_PIN      = '1234';
+var FIXED_HOST_KEY = 'Clutch123';
+
 var SUBMIT_GRACE_MS = 2500;   // accept submits this long after the deadline (round-trip slack)
 var CACHE_SECONDS   = 2;      // shared state snapshot cache
 var LOCK_MS         = 15000;
@@ -107,8 +113,8 @@ function game() {
   var sh = tab('Game');
   if (sh.getLastRow() < 2) {
     var fresh = {
-      pin: makePin(), round: 1, stage: 'lobby', deadline: 0, submitSeconds: 60,
-      hostKey: makeToken(10), imageVersion: 0, runoff: '', updatedAt: Date.now()
+      pin: FIXED_PIN, round: 1, stage: 'lobby', deadline: 0, submitSeconds: 60,
+      hostKey: FIXED_HOST_KEY, imageVersion: 0, runoff: '', updatedAt: Date.now()
     };
     appendRow('Game', fresh);
     return fresh;
@@ -122,7 +128,12 @@ function game() {
   g.submitSeconds = Number(g.submitSeconds) || 60;
   g.imageVersion = Number(g.imageVersion) || 0;
   g.runoff = String(g.runoff || '');
-  if (!g.hostKey) { g.hostKey = makeToken(10); saveGame(g); }
+  // Always the fixed values, even if the Sheet still holds older random ones.
+  if (String(g.pin) !== FIXED_PIN || String(g.hostKey) !== FIXED_HOST_KEY) {
+    g.pin = FIXED_PIN;
+    g.hostKey = FIXED_HOST_KEY;
+    saveGame(g);
+  }
   return g;
 }
 
@@ -137,11 +148,6 @@ function saveGame(g) {
 
 function bust() { try { CacheService.getScriptCache().remove('shared'); } catch (e) {} }
 
-function makePin() {
-  var n = '';
-  for (var i = 0; i < 4; i++) n += String(Math.floor(Math.random() * 10));
-  return n;
-}
 function makeToken(len) {
   var abc = 'abcdefghijkmnpqrstuvwxyz23456789', s = '';
   for (var i = 0; i < (len || 16); i++) s += abc.charAt(Math.floor(Math.random() * abc.length));
@@ -555,7 +561,7 @@ function hostSetImage(p, g) {
   return { ok: true, version: g.imageVersion };
 }
 
-/** Wipe every round and start over with a new PIN. */
+/** Wipe every round and start over. The PIN stays 1234. */
 function hostResetAll(p, g) {
   ['Players', 'Entries', 'Votes'].forEach(function (name) {
     var sh = tab(name);
@@ -565,14 +571,14 @@ function hostResetAll(p, g) {
   g.stage = 'lobby';
   g.deadline = 0;
   g.runoff = '';
-  g.pin = makePin();
+  g.pin = FIXED_PIN;
   saveGame(g);
   return { ok: true, pin: g.pin };
 }
 
 /* ------------------------------------------------------------------- setup */
 
-/** Run this once from the editor: creates the tabs and prints your presenter key. */
+/** Run this once from the editor: creates the tabs and prints the PIN and key. */
 function setup() {
   Object.keys(TABS).forEach(function (n) { tab(n); });
   var g = game();

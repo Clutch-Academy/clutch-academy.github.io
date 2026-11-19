@@ -23,14 +23,16 @@ backend, which is one Apps Script file attached to a Google Sheet. Budget five m
 2. Google will warn you: **Review permissions → pick your clutch.ca account →
    Advanced → Go to Name the Mascot (unsafe) → Allow.**
    That warning is normal for a script you wrote yourself and have not submitted for review.
-3. Look at the **Execution log** underneath. It prints two things — copy both:
+3. That's it — the tabs are created. Your two codes are fixed in the script, so
+   there is nothing to copy down:
 
-   ```
-   PIN: 4071
-   Presenter key: k3m9x2qp7w
-   ```
+   | | |
+   |---|---|
+   | **Game PIN** | `1234` |
+   | **Presenter key** | `Clutch123` |
 
-   Lost them later? Run **`showHostKey`** and look at the log again.
+   They're set by `FIXED_PIN` and `FIXED_HOST_KEY` at the top of `Code.gs`. Change
+   those two lines if you ever want different ones.
 
 ## Step 3 — Deploy it as a web app
 
@@ -51,7 +53,7 @@ backend, which is one Apps Script file attached to a Google Sheet. Budget five m
 ## Step 4 — Connect the presenter page
 
 1. Open **`…/clutch-ai-games/mascot-host/`** on the laptop you'll present from.
-2. Paste the **`/exec` URL** and the **presenter key**, then **Connect**.
+2. Paste the **`/exec` URL** and the presenter key `Clutch123`, then **Connect**.
 3. Both are saved in that browser, so you only do this once. The red
    **Disconnect this laptop** button under *Round and session controls* clears them.
 
@@ -83,7 +85,7 @@ and it's the only part of this I could not test for you.
   *Round and session controls → Submission seconds* before you start.
 - A tie sends the tied names to an automatic **runoff** — press
   *Close voting and reveal* a second time once the room has voted again.
-- **Reset everything** wipes all rounds and issues a new PIN. You won't normally need it.
+- **Reset everything** wipes all rounds. The PIN stays `1234`. You won't normally need it.
 
 ## Changing the code later
 
@@ -107,6 +109,11 @@ Nothing is deleted by a **New round** — every round stays in the Sheet, so you
 look back at what the room came up with.
 
 ## Known limits — worth knowing before you present
+
+- **The PIN and presenter key are guessable on purpose.** Anyone who gets your
+  `/exec` URL could enter `Clutch123` and drive the game. That's a fair trade for a
+  room of colleagues, but don't post the URL anywhere public, and don't reuse
+  `Clutch123` as a password for anything that matters.
 
 - **Someone could vote twice** by using a different browser *and* a different
   nickname before voting opens. Joining is blocked once voting starts, and refreshing

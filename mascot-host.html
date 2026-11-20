@@ -132,13 +132,11 @@ summary{cursor:pointer;color:var(--muted);font-size:.86rem;font-weight:600;paddi
 
   <!-- first-run setup -->
   <section id="setup" class="card">
-    <h2>Connect to your game</h2>
-    <p class="hint">Paste these once. They stay on this laptop — nothing is published with them.</p>
-    <label for="exec">Apps Script web app URL</label>
-    <input id="exec" type="url" placeholder="https://script.google.com/macros/s/AKfy…/exec" spellcheck="false">
+    <h2>Unlock the presenter controls</h2>
+    <p class="hint">Once per laptop. It's kept in this browser and never leaves it.</p>
     <label for="hkey">Presenter key</label>
-    <input id="hkey" type="text" placeholder="from showHostKey() in the script editor" spellcheck="false">
-    <button class="btn" id="connect">Connect</button>
+    <input id="hkey" type="password" placeholder="presenter key" spellcheck="false" autocomplete="off">
+    <button class="btn" id="connect">Unlock</button>
     <div class="msg" id="setupMsg"></div>
   </section>
 
@@ -199,7 +197,7 @@ summary{cursor:pointer;color:var(--muted);font-size:.86rem;font-weight:600;paddi
           <summary>Round and session controls</summary>
           <div class="row" style="margin-top:10px">
             <button class="btn ghost small" id="newRound">New round (keeps the PIN)</button>
-            <button class="btn ghost small" id="resetAll">Reset everything</button>
+            <button class="btn ghost small" id="resetAll">Start a fresh game</button>
             <button class="btn ghost small" id="forget">Disconnect this laptop</button>
           </div>
           <label for="secs">Submission seconds</label>
@@ -212,334 +210,391 @@ summary{cursor:pointer;color:var(--muted);font-size:.86rem;font-weight:600;paddi
 
 <canvas class="confetti hide" id="confetti"></canvas>
 <script src="vendor/qrcode.min.js"></script>
-<script>
-(function () {
-  'use strict';
-  var el = function (id) { return document.getElementById(id); };
+<script type="module">
+import { initializeApp } from "https://www.gstatic.com/firebasejs/11.10.0/firebase-app.js";
+import { getAuth, signInAnonymously } from "https://www.gstatic.com/firebasejs/11.10.0/firebase-auth.js";
+import { getDatabase, ref, onValue, update, set, serverTimestamp }
+  from "https://www.gstatic.com/firebasejs/11.10.0/firebase-database.js";
+import { firebaseConfig } from "/mascot-config.js";
 
-  var API = '', KEY = '';
-  try { API = localStorage.getItem('mascotHostApi') || ''; KEY = localStorage.getItem('mascotHostKey') || ''; } catch (e) {}
+const el = (id) => document.getElementById(id);
+function note(node, text, kind) {
+  node.className = 'msg' + (text ? ' ' + (kind || 'err') : '');
+  node.textContent = text || '';
+}
 
-  function call(payload) {
-    return fetch(API, { method: 'POST', redirect: 'follow', body: JSON.stringify(payload) })
-      .then(function (r) { return r.json(); });
-  }
-  function note(node, text, kind) {
-    node.className = 'msg' + (text ? ' ' + (kind || 'err') : '');
-    node.textContent = text || '';
-  }
+const PIN = '1234';
+let DB = null, UID = null, G = null, round = null, offset = 0;
+let playerIds = {}, players = {}, entriesMap = {}, owners = {}, votes = {};
+let shownStage = '';
 
-  /* ------------------------------------------------ the participant link - */
-  // Same folder as this page, but the player file. Works for both
-  // /mascot-host.html and the clean /mascot-host/ path.
-  function playerUrl(pin) {
-    var p = location.pathname;
-    var base;
-    if (/mascot-host\.html$/.test(p))      base = p.replace(/mascot-host\.html$/, 'mascot.html');
-    else if (/mascot-host\/?$/.test(p))    base = p.replace(/mascot-host\/?$/, 'mascot/');
-    else                                   base = p.replace(/[^/]*$/, 'mascot.html');
-    var u = location.origin + base;
-    // Short form keeps the QR sparse and easier to scan across a room.
-    var m = API.match(/^https:\/\/script\.google\.com\/macros\/s\/([A-Za-z0-9_-]+)\/exec$/);
-    u += m ? ('?s=' + m[1]) : ('?api=' + encodeURIComponent(API));
-    if (pin) u += '&pin=' + pin;
-    return u;
-  }
+const now = () => Date.now() + offset;
+const deadline = () => (G && G.startedAt) ? G.startedAt + (G.submitSeconds || 60) * 1000 : 0;
+const votingOpen = () => !!G && (G.stage === 'voting' || G.stage === 'runoff' ||
+  (G.stage === 'submitting' && deadline() && now() > deadline() + 2500));
 
-  var qr = null, qrFor = '';
-  function drawQR(url) {
-    if (qrFor === url) return;
-    qrFor = url;
-    el('qrbox').innerHTML = '';
-    qr = new QRCode(el('qrbox'), {
-      text: url, width: 440, height: 440,
-      colorDark: '#550E30', colorLight: '#FFFFFF',
-      correctLevel: QRCode.CorrectLevel.L
-    });
-    el('joinurl').href = url;
-    el('joinurl').textContent = url.replace(/^https?:\/\//, '').split('?')[0];
-  }
+/* ---- the link the room scans ------------------------------------------ */
+function playerUrl() {
+  const p = location.pathname;
+  let base;
+  if (/mascot-host\.html$/.test(p))   base = p.replace(/mascot-host\.html$/, 'mascot.html');
+  else if (/mascot-host\/?$/.test(p)) base = p.replace(/mascot-host\/?$/, 'mascot/');
+  else                                base = p.replace(/[^/]*$/, 'mascot.html');
+  return location.origin + base + '?pin=' + PIN;
+}
+let qrFor = '';
+function drawQR(url) {
+  if (qrFor === url) return;
+  qrFor = url;
+  el('qrbox').innerHTML = '';
+  new QRCode(el('qrbox'), {
+    text: url, width: 440, height: 440,
+    colorDark: '#550E30', colorLight: '#FFFFFF',
+    correctLevel: QRCode.CorrectLevel.L
+  });
+  el('joinurl').href = url;
+  el('joinurl').textContent = url.replace(/^https?:\/\//, '').split('?')[0];
+}
 
-  /* ------------------------------------------------------------- state -- */
-  var S = null, offset = 0, inFlight = false, imgVersion = -1, shown = '';
-  function serverNow() { return Date.now() + offset; }
+/* ---- live subscriptions ------------------------------------------------ */
+const live = {};
+function watch(key, path, cb) {
+  if (live[key] && live[key].path === path) return;
+  if (live[key]) live[key].off();
+  live[key] = {
+    path,
+    off: onValue(ref(DB, path), (s) => cb(s.val()), () => {
+      if (live[key] && live[key].path === path) live[key] = null;
+      setTimeout(() => { if (!live[key]) watch(key, path, cb); }, 1500);
+    })
+  };
+}
+function roundWatches() {
+  const b = 'rounds/' + round;
+  watch('pids',    b + '/playerIds',  v => { playerIds = v || {}; render(); });
+  watch('players', b + '/players',    v => { players   = v || {}; render(); });
+  watch('entries', b + '/entries',    v => { entriesMap = v || {}; render(); });
+  watch('owners',  b + '/entryOwner', v => { owners    = v || {}; render(); });
+  watch('votes',   b + '/votes',      v => { votes     = v || {}; render(); });
+}
 
-  function poll() {
-    if (inFlight || !API) return Promise.resolve();
-    inFlight = true;
-    return call({ action: 'state', hostKey: KEY })
-      .then(function (s) {
-        if (s && s.ok) { offset = s.serverNow - Date.now(); S = s; render(); }
-      })
-      .catch(function () {})
-      .then(function () { inFlight = false; });
-  }
+/* ---- counting ---------------------------------------------------------- */
+const nickOf = (eid) => (players[owners[eid]] || {}).nick || 'Unknown';
+function counts(ph) {
+  const c = {};
+  Object.keys(entriesMap).forEach(id => c[id] = 0);
+  const v = votes[ph] || {};
+  Object.keys(v).forEach(uid => { const t = v[uid]; if (t in c) c[t]++; });
+  return c;
+}
+function currentPhase() { return G && G.stage === 'runoff' ? 'runoff' : 'main'; }
 
-  // Ask again as soon as the last answer lands, rather than on a fixed clock.
-  function gap() {
-    if (!S) return 1200;
-    switch (S.stage) {
-      case 'lobby':      return 1200;   // watching people arrive
-      case 'submitting': return 1500;   // watching the submission count
-      case 'voting':
-      case 'runoff':     return 1500;   // watching the vote count
-      case 'results':    return 6000;
-      default:           return 2000;
-    }
-  }
-  function loop() { poll().then(function () { setTimeout(loop, gap()); }); }
-
-  function act(action, extra) {
-    var p = { action: action, hostKey: KEY };
-    if (extra) for (var k in extra) p[k] = extra[k];
-    note(el('actMsg'), '');
-    return call(p).then(function (r) {
-      if (!r || !r.ok) note(el('actMsg'), (r && r.error) || 'That did not work');
-      else if (r.tie) note(el('actMsg'), "It's a tie — " + r.tiedCount + ' names go to a runoff. Hit Close voting again when they have voted.', 'warn');
-      poll();
-      return r;
-    }).catch(function () { note(el('actMsg'), 'No connection to the game'); });
-  }
-
-  /* ------------------------------------------------------------ render -- */
-  var LABEL = { lobby: 'Lobby', submitting: 'Submissions open', voting: 'Voting open',
+/* ---- render ------------------------------------------------------------ */
+const LABEL = { lobby: 'Lobby', submitting: 'Submissions open', voting: 'Voting open',
                 runoff: 'Runoff vote', results: 'Results' };
 
-  function render() {
-    if (!S) return;
-    el('chip').innerHTML = 'Round ' + S.round + ' · <b>' + (LABEL[S.stage] || S.stage) + '</b>';
-    el('pin').textContent = S.pin || '––––';
-    el('pcount').textContent = S.playerCount;
-    drawQR(playerUrl(S.pin));
-    if (S.imageVersion && S.imageVersion !== imgVersion) loadMascot(S.imageVersion);
+function render() {
+  if (!G) return;
+  const stage = votingOpen() && G.stage === 'submitting' ? 'voting' : G.stage;
+  el('chip').innerHTML = 'Round ' + round + ' · <b>' + (LABEL[stage] || stage) + '</b>';
+  el('pin').textContent = PIN;
+  const nPlayers = Object.keys(playerIds).length;
+  el('pcount').textContent = nPlayers;
+  drawQR(playerUrl());
+  if (G.imageVersion) mascot(G.imageVersion);
 
-    var stage = S.stage;
-    el('main').classList.toggle('lobby', stage === 'lobby');
-    el('bigBox').classList.toggle('hide', stage !== 'submitting');
-    el('lobbyNames').classList.toggle('hide', stage !== 'lobby');
-    el('entryList').classList.toggle('hide', !(stage === 'voting' || stage === 'runoff'));
-    el('resultsCard').classList.toggle('hide', stage !== 'results');
+  el('main').classList.toggle('lobby', stage === 'lobby');
+  el('bigBox').classList.toggle('hide', stage !== 'submitting');
+  el('lobbyNames').classList.toggle('hide', stage !== 'lobby');
+  el('entryList').classList.toggle('hide', !(stage === 'voting' || stage === 'runoff'));
+  el('resultsCard').classList.toggle('hide', stage !== 'results');
 
-    if (stage === 'lobby') {
-      el('stageTitle').textContent = S.playerCount ? S.playerCount + ' in the room' : 'Waiting for the room';
-      el('stageHint').textContent = 'People can join now. Start when the room is settled.';
-      var box = el('lobbyNames'); box.innerHTML = '';
-      (S.players || []).forEach(function (n) {
-        var s = document.createElement('span'); s.textContent = n; box.appendChild(s);
-      });
-    } else if (stage === 'submitting') {
-      el('stageTitle').textContent = S.submissionCount + ' of ' + S.playerCount + ' have submitted';
-      el('stageHint').textContent = 'Names stay hidden until submissions close.';
-      tick();
-    } else if (stage === 'voting' || stage === 'runoff') {
-      el('stageTitle').textContent = S.voteCount + ' of ' + S.playerCount + ' have voted';
-      el('stageHint').textContent = stage === 'runoff'
-        ? 'Runoff between the tied names. No counts shown until you close it.'
-        : 'All the names, no counts. Close voting when the room is done.';
-      drawEntries();
-    } else if (stage === 'results') {
-      el('stageTitle').textContent = 'Winner revealed';
-      el('stageHint').textContent = 'Start a new round whenever you like — the QR and PIN stay the same.';
-      drawResults();
-    }
-    drawControls();
-    shown = stage;
-  }
-
-  function tick() {
-    if (!S || S.stage !== 'submitting' || !S.deadline) return;
-    var left = Math.max(0, S.deadline - serverNow());
-    var secs = Math.ceil(left / 1000);
-    el('bigN').textContent = secs;
-    el('bigU').textContent = secs === 1 ? 'second left' : 'seconds left';
-    el('big').classList.toggle('low', secs <= 10);
-    var total = (S.submitSeconds || 60) * 1000;
-    el('bar').style.width = Math.max(0, Math.min(100, (left / total) * 100)) + '%';
-  }
-  setInterval(function () { if (S && S.stage === 'submitting') tick(); }, 200);
-
-  function drawEntries() {
-    var box = el('entryList');
-    var sig = (S.entries || []).map(function (e) { return e.id; }).join('|');
-    if (box.dataset.sig === sig) return;
-    box.dataset.sig = sig;
-    box.innerHTML = '';
-    (S.entries || []).forEach(function (e) {
-      var d = document.createElement('div'); d.className = 'entry'; d.textContent = e.text;
-      box.appendChild(d);
+  const nEntries = Object.keys(entriesMap).length;
+  if (stage === 'lobby') {
+    el('stageTitle').textContent = nPlayers ? nPlayers + ' in the room' : 'Waiting for the room';
+    el('stageHint').textContent = 'People can join now. Start when the room is settled.';
+    const box = el('lobbyNames'); box.innerHTML = '';
+    Object.keys(players).forEach(uid => {
+      const s = document.createElement('span'); s.textContent = players[uid].nick; box.appendChild(s);
     });
+  } else if (stage === 'submitting') {
+    el('stageTitle').textContent = nEntries + ' of ' + nPlayers + ' have submitted';
+    el('stageHint').textContent = 'Names stay hidden until submissions close.';
+    tick();
+  } else if (stage === 'voting' || stage === 'runoff') {
+    const nVotes = Object.keys(votes[currentPhase()] || {}).length;
+    el('stageTitle').textContent = nVotes + ' of ' + nPlayers + ' have voted';
+    el('stageHint').textContent = stage === 'runoff'
+      ? 'Runoff between the tied names. No counts shown until you close it.'
+      : 'All the names, no counts. Close voting when the room is done.';
+    drawEntries();
+  } else if (stage === 'results') {
+    el('stageTitle').textContent = 'Winner revealed';
+    el('stageHint').textContent = 'Start a new round whenever you like — the QR and PIN stay the same.';
+    drawResults();
   }
+  drawControls(stage);
+  shownStage = stage;
+}
 
-  function drawResults() {
-    var w = S.winner;
-    if (!w) {
-      el('winnerBox').classList.add('hide');
-      el('ranks').innerHTML = '<p class="hint">Nobody submitted a name this round.</p>';
-      return;
-    }
-    el('winnerBox').classList.remove('hide');
-    el('wName').textContent = w.text;
-    el('wBy').textContent = 'Submitted by ' + w.nickname;
-    var n = (w.decidedBy === 'runoff') ? w.runoffVotes : w.votes;
-    el('wVotes').textContent = n + (n === 1 ? ' vote' : ' votes')
-      + (w.decidedBy === 'runoff' ? ' in the runoff' : '')
-      + (w.decidedBy === 'coin-toss' ? ' · tie broken at random' : '');
-    if (shown !== 'results') burst();
+function tick() {
+  if (!G || G.stage !== 'submitting' || !deadline()) return;
+  const left = Math.max(0, deadline() - now());
+  const secs = Math.ceil(left / 1000);
+  el('bigN').textContent = secs;
+  el('bigU').textContent = secs === 1 ? 'second left' : 'seconds left';
+  el('big').classList.toggle('low', secs <= 10);
+  el('bar').style.width = Math.max(0, Math.min(100, (left / ((G.submitSeconds || 60) * 1000)) * 100)) + '%';
+}
+setInterval(() => { if (G && G.stage === 'submitting') { tick(); if (votingOpen()) render(); } }, 200);
 
-    var box = el('ranks'); box.innerHTML = '';
-    (S.results || []).forEach(function (r, i) {
-      var row = document.createElement('div'); row.className = 'rank';
-      var a = document.createElement('span'); a.className = 'pos'; a.textContent = (i + 1);
-      var b = document.createElement('span'); b.className = 't'; b.textContent = r.text;
-      var c = document.createElement('span'); c.className = 'who'; c.textContent = r.nickname;
-      var d = document.createElement('span'); d.className = 'v';
-      d.textContent = (w.decidedBy === 'runoff' && r.runoffVotes) ? r.runoffVotes : r.votes;
-      row.appendChild(a); row.appendChild(b); row.appendChild(c); row.appendChild(d);
-      box.appendChild(row);
-    });
-  }
-
-  /* ---------------------------------------------------------- controls -- */
-  function drawControls() {
-    var box = el('controls');
-    var want = S.stage;
-    if (box.dataset.for === want) return;
-    box.dataset.for = want;
-    box.innerHTML = '';
-    function add(text, fn, ghost) {
-      var b = document.createElement('button');
-      b.className = 'btn' + (ghost ? ' ghost' : '');
-      b.textContent = text;
-      b.addEventListener('click', fn);
-      box.appendChild(b);
-    }
-    if (S.stage === 'lobby') {
-      add('Start submissions', function () {
-        act('start', { seconds: Number(el('secs').value) || 60 });
-      });
-    } else if (S.stage === 'submitting') {
-      add('End submissions now', function () { act('endSubmit'); }, true);
-    } else if (S.stage === 'voting' || S.stage === 'runoff') {
-      add('Close voting and reveal', function () { act('closeVoting'); });
-    } else if (S.stage === 'results') {
-      add('New round', function () { act('restart'); });
-    }
-  }
-
-  el('newRound').addEventListener('click', function () { act('restart'); });
-  el('resetAll').addEventListener('click', function () {
-    if (confirm('Wipe every round, every name and every vote, and issue a new PIN?')) act('resetAll');
+function drawEntries() {
+  const box = el('entryList');
+  const ids = Object.keys(entriesMap).sort();
+  const pool = (G.stage === 'runoff' && G.runoff) ? ids.filter(id => G.runoff[id]) : ids;
+  const sig = pool.join('|');
+  if (box.dataset.sig === sig) return;
+  box.dataset.sig = sig;
+  box.innerHTML = '';
+  pool.forEach(id => {
+    const d = document.createElement('div'); d.className = 'entry';
+    d.textContent = entriesMap[id].text; box.appendChild(d);
   });
-  el('forget').addEventListener('click', function () {
-    if (!confirm('Forget the game address and presenter key on this laptop?')) return;
-    try { localStorage.removeItem('mascotHostApi'); localStorage.removeItem('mascotHostKey'); } catch (e) {}
-    location.reload();
-  });
+}
 
-  /* ------------------------------------------------------ mascot upload - */
-  function loadMascot(v) {
-    imgVersion = v;
-    call({ action: 'image', version: v }).then(function (r) {
-      if (!r || !r.ok || !r.dataUrl) return;
-      var box = el('prev'); box.innerHTML = '';
-      var img = new Image(); img.alt = 'The mascot'; img.src = r.dataUrl;
-      box.appendChild(img);
-    }).catch(function () {});
+function drawResults() {
+  const mainC = counts('main'), runC = counts('runoff');
+  const usedRunoff = !!(G.runoff && Object.keys(G.runoff).length);
+  const ids = Object.keys(entriesMap);
+  if (!ids.length) {
+    el('winnerBox').classList.add('hide');
+    el('ranks').innerHTML = '<p class="hint">Nobody submitted a name this round.</p>';
+    return;
   }
+  const pool = usedRunoff ? ids.filter(id => G.runoff[id]) : ids;
+  const key = usedRunoff ? runC : mainC;
+  let best = -1; pool.forEach(id => { if (key[id] > best) best = key[id]; });
+  const tied = pool.filter(id => key[id] === best);
+  const wid = tied[0];
 
-  el('file').addEventListener('change', function () {
-    var f = el('file').files && el('file').files[0];
-    if (!f) return;
-    note(el('imgMsg'), 'Resizing…', 'warn');
-    var fr = new FileReader();
-    fr.onload = function () {
-      var img = new Image();
-      img.onload = function () {
-        // 600px long edge keeps it crisp on a phone and small enough for the Sheet.
-        var max = 600, w = img.width, h = img.height;
-        if (w > h && w > max) { h = Math.round(h * max / w); w = max; }
-        else if (h >= w && h > max) { w = Math.round(w * max / h); h = max; }
-        var c = document.createElement('canvas'); c.width = w; c.height = h;
-        var ctx = c.getContext('2d');
-        ctx.fillStyle = '#FFFFFF'; ctx.fillRect(0, 0, w, h);   // flatten transparency
-        ctx.drawImage(img, 0, 0, w, h);
-        var out = c.toDataURL('image/jpeg', 0.82);
-        note(el('imgMsg'), 'Uploading ' + Math.round(out.length / 1024) + ' KB…', 'warn');
-        call({ action: 'setImage', dataUrl: out, hostKey: KEY }).then(function (r) {
-          if (r && r.ok) { note(el('imgMsg'), 'Mascot is live on every phone.', 'good'); imgVersion = -1; poll(); }
-          else note(el('imgMsg'), (r && r.error) || 'Upload failed');
-        }).catch(function () { note(el('imgMsg'), 'Upload failed — check the connection'); });
-      };
-      img.onerror = function () { note(el('imgMsg'), 'That file is not an image this browser can read'); };
-      img.src = fr.result;
+  el('winnerBox').classList.remove('hide');
+  el('wName').textContent = entriesMap[wid].text;
+  el('wBy').textContent = 'Submitted by ' + nickOf(wid);
+  const n = key[wid] || 0;
+  el('wVotes').textContent = n + (n === 1 ? ' vote' : ' votes')
+    + (usedRunoff ? ' in the runoff' : '')
+    + (tied.length > 1 ? ' · tie broken at random' : '');
+  if (shownStage !== 'results') burst();
+
+  const box = el('ranks'); box.innerHTML = '';
+  ids.map(id => ({ id, text: entriesMap[id].text, votes: mainC[id] || 0, who: nickOf(id) }))
+     .sort((a, b) => b.votes - a.votes)
+     .forEach((r, i) => {
+       const row = document.createElement('div'); row.className = 'rank';
+       const a = document.createElement('span'); a.className = 'pos'; a.textContent = i + 1;
+       const b = document.createElement('span'); b.className = 't'; b.textContent = r.text;
+       const c = document.createElement('span'); c.className = 'who'; c.textContent = r.who;
+       const d = document.createElement('span'); d.className = 'v'; d.textContent = r.votes;
+       row.appendChild(a); row.appendChild(b); row.appendChild(c); row.appendChild(d);
+       box.appendChild(row);
+     });
+}
+
+/* ---- presenter actions -------------------------------------------------- */
+async function act(fn) {
+  note(el('actMsg'), '');
+  try { await fn(); }
+  catch (e) { note(el('actMsg'), 'That did not go through: ' + (e && e.code ? e.code : e)); }
+}
+
+async function startRound() {
+  const secs = Math.max(5, Math.min(600, Number(el('secs').value) || 60));
+  await update(ref(DB, 'game'),
+    { stage: 'submitting', startedAt: serverTimestamp(), submitSeconds: secs, runoff: null });
+}
+async function endSubmissions() {
+  await update(ref(DB, 'game'), { stage: 'voting' });
+}
+async function closeVoting() {
+  const ph = currentPhase();
+  const c = counts(ph);
+  const ids = Object.keys(entriesMap);
+  const pool = (G.stage === 'runoff' && G.runoff) ? ids.filter(id => G.runoff[id]) : ids;
+  let best = -1; pool.forEach(id => { if (c[id] > best) best = c[id]; });
+  const tied = pool.filter(id => c[id] === best);
+
+  // A genuine tie goes to a runoff, but only once.
+  if (G.stage !== 'runoff' && tied.length >= 2 && pool.length > 1) {
+    const runoff = {}; tied.forEach(id => runoff[id] = true);
+    await update(ref(DB, 'game'), { stage: 'runoff', runoff });
+    note(el('actMsg'), "It's a tie — " + tied.length + ' names go to a runoff. Press Close voting again once the room has voted.', 'warn');
+    return;
+  }
+  const wid = tied.length ? tied[Math.floor(Math.random() * tied.length)] : null;
+  const mainC = counts('main');
+  const result = wid ? {
+    winner: {
+      text: entriesMap[wid].text,
+      nickname: nickOf(wid),
+      votes: c[wid] || 0,
+      decidedBy: tied.length > 1 ? 'coin-toss' : (G.stage === 'runoff' ? 'runoff' : 'vote')
+    },
+    // No nicknames here: this node is the one thing phones can read.
+    table: ids.map(id => ({ text: entriesMap[id].text, votes: mainC[id] || 0 }))
+              .sort((a, b) => b.votes - a.votes)
+  } : { winner: null, table: [] };
+
+  await set(ref(DB, 'rounds/' + round + '/result'), result);
+  await update(ref(DB, 'game'), { stage: 'results' });
+}
+async function newRound() {
+  await update(ref(DB, 'game'),
+    { round: String(Number(round) + 1), stage: 'lobby', startedAt: null, runoff: null });
+}
+
+function drawControls(stage) {
+  const box = el('controls');
+  if (box.dataset.for === stage) return;
+  box.dataset.for = stage;
+  box.innerHTML = '';
+  const add = (text, fn, ghost) => {
+    const b = document.createElement('button');
+    b.className = 'btn' + (ghost ? ' ghost' : '');
+    b.textContent = text;
+    b.addEventListener('click', () => act(fn));
+    box.appendChild(b);
+  };
+  if (stage === 'lobby')            add('Start submissions', startRound);
+  else if (stage === 'submitting')  add('End submissions now', endSubmissions, true);
+  else if (stage === 'voting' || stage === 'runoff') add('Close voting and reveal', closeVoting);
+  else if (stage === 'results')     add('New round', newRound);
+}
+
+el('newRound').addEventListener('click', () => act(newRound));
+el('resetAll').addEventListener('click', () => {
+  if (confirm('Start a fresh game? Earlier rounds stay in the database but nobody can reach them.')) act(newRound);
+});
+el('forget').addEventListener('click', () => {
+  if (!confirm('Forget the presenter key on this laptop?')) return;
+  try { localStorage.removeItem('mascotHostKey'); } catch (e) {}
+  location.reload();
+});
+
+/* ---- mascot ------------------------------------------------------------- */
+let shownImage = -1;
+function mascot(v) {
+  if (v === shownImage) return;
+  shownImage = v;
+  onValue(ref(DB, 'mascot/' + v), (s) => {
+    if (!s.val()) return;
+    const box = el('prev'); box.innerHTML = '';
+    const img = new Image(); img.alt = 'The mascot'; img.src = s.val();
+    box.appendChild(img);
+  }, () => {}, { onlyOnce: true });
+}
+
+el('file').addEventListener('change', () => {
+  const f = el('file').files && el('file').files[0];
+  if (!f) return;
+  note(el('imgMsg'), 'Resizing…', 'warn');
+  const fr = new FileReader();
+  fr.onload = () => {
+    const img = new Image();
+    img.onload = async () => {
+      const max = 600;
+      let w = img.width, h = img.height;
+      if (w > h && w > max) { h = Math.round(h * max / w); w = max; }
+      else if (h >= w && h > max) { w = Math.round(w * max / h); h = max; }
+      const c = document.createElement('canvas'); c.width = w; c.height = h;
+      const ctx = c.getContext('2d');
+      ctx.fillStyle = '#FFFFFF'; ctx.fillRect(0, 0, w, h);
+      ctx.drawImage(img, 0, 0, w, h);
+      const out = c.toDataURL('image/jpeg', 0.82);
+      if (out.length > 390000) { note(el('imgMsg'), 'That image is too large even after resizing.'); return; }
+      note(el('imgMsg'), 'Uploading ' + Math.round(out.length / 1024) + ' KB…', 'warn');
+      try {
+        const v = Number(G.imageVersion || 0) + 1;
+        await set(ref(DB, 'mascot/' + v), out);
+        await update(ref(DB, 'game'), { imageVersion: v });
+        shownImage = -1;
+        note(el('imgMsg'), 'Mascot is live on every phone.', 'good');
+      } catch (e) { note(el('imgMsg'), 'Upload failed: ' + (e && e.code ? e.code : e)); }
     };
-    fr.readAsDataURL(f);
-  });
+    img.onerror = () => note(el('imgMsg'), 'That file is not an image this browser can read');
+    img.src = fr.result;
+  };
+  fr.readAsDataURL(f);
+});
 
-  /* -------------------------------------------------------- confetti ---- */
-  function burst() {
-    var cv = el('confetti');
-    if (window.matchMedia && window.matchMedia('(prefers-reduced-motion: reduce)').matches) return;
-    cv.classList.remove('hide');
-    cv.width = innerWidth; cv.height = innerHeight;
-    var ctx = cv.getContext('2d');
-    var cols = ['#FF464C', '#550E30', '#E6D6F9', '#DF0C00', '#FFFFFF'];
-    var bits = [];
-    for (var i = 0; i < 140; i++) {
-      bits.push({ x: Math.random() * cv.width, y: -20 - Math.random() * cv.height * 0.6,
-        w: 6 + Math.random() * 7, h: 9 + Math.random() * 10,
-        vy: 2 + Math.random() * 3.4, vx: -1.3 + Math.random() * 2.6,
-        a: Math.random() * 6.28, va: -0.12 + Math.random() * 0.24,
-        c: cols[Math.floor(Math.random() * cols.length)] });
-    }
-    var end = Date.now() + 4200;
-    (function frame() {
-      ctx.clearRect(0, 0, cv.width, cv.height);
-      bits.forEach(function (b) {
-        b.x += b.vx; b.y += b.vy; b.a += b.va;
-        ctx.save(); ctx.translate(b.x, b.y); ctx.rotate(b.a);
-        ctx.fillStyle = b.c; ctx.fillRect(-b.w / 2, -b.h / 2, b.w, b.h); ctx.restore();
-      });
-      if (Date.now() < end) requestAnimationFrame(frame);
-      else { ctx.clearRect(0, 0, cv.width, cv.height); cv.classList.add('hide'); }
-    })();
+/* ---- confetti ----------------------------------------------------------- */
+function burst() {
+  const cv = el('confetti');
+  if (window.matchMedia && window.matchMedia('(prefers-reduced-motion: reduce)').matches) return;
+  cv.classList.remove('hide');
+  cv.width = innerWidth; cv.height = innerHeight;
+  const ctx = cv.getContext('2d');
+  const cols = ['#FF464C', '#550E30', '#E6D6F9', '#DF0C00', '#FFFFFF'];
+  const bits = [];
+  for (let i = 0; i < 140; i++) {
+    bits.push({ x: Math.random() * cv.width, y: -20 - Math.random() * cv.height * 0.6,
+      w: 6 + Math.random() * 7, h: 9 + Math.random() * 10,
+      vy: 2 + Math.random() * 3.4, vx: -1.3 + Math.random() * 2.6,
+      a: Math.random() * 6.28, va: -0.12 + Math.random() * 0.24,
+      c: cols[Math.floor(Math.random() * cols.length)] });
   }
+  const end = Date.now() + 4200;
+  (function frame() {
+    ctx.clearRect(0, 0, cv.width, cv.height);
+    bits.forEach(b => {
+      b.x += b.vx; b.y += b.vy; b.a += b.va;
+      ctx.save(); ctx.translate(b.x, b.y); ctx.rotate(b.a);
+      ctx.fillStyle = b.c; ctx.fillRect(-b.w / 2, -b.h / 2, b.w, b.h); ctx.restore();
+    });
+    if (Date.now() < end) requestAnimationFrame(frame);
+    else { ctx.clearRect(0, 0, cv.width, cv.height); cv.classList.add('hide'); }
+  })();
+}
 
-  /* ------------------------------------------------------------- boot --- */
-  el('connect').addEventListener('click', function () {
-    var a = el('exec').value.trim(), k = el('hkey').value.trim();
-    var looksRight = /^https:\/\/script\.google\.com\/.*\/exec$/.test(a)
-                  || /^http:\/\/localhost(:\d+)?\/exec$/.test(a);   // local rehearsal
-    if (!looksRight) {
-      note(el('setupMsg'), 'That should be the /exec URL from Deploy → Web app'); return;
+/* ---- boot --------------------------------------------------------------- */
+async function claim(key) {
+  await set(ref(DB, 'hostClaims/' + UID), key);   // rejected unless the key is right
+  try { localStorage.setItem('mascotHostKey', key); } catch (e) {}
+  el('setup').classList.add('hide');
+  el('main').classList.remove('hide');
+  watch('game', 'game', (v) => {
+    G = v || { stage: 'lobby', round: '1' };
+    if (G.round !== round) {
+      round = G.round;
+      playerIds = {}; players = {}; entriesMap = {}; owners = {}; votes = {};
+      roundWatches();
     }
-    if (!k) { note(el('setupMsg'), 'Paste the presenter key too'); return; }
-    el('connect').disabled = true;
-    API = a; KEY = k;
-    call({ action: 'state', hostKey: KEY }).then(function (s) {
-      if (s && s.ok && s.host) {
-        try { localStorage.setItem('mascotHostApi', API); localStorage.setItem('mascotHostKey', KEY); } catch (e) {}
-        note(el('setupMsg'), '');
-        el('setup').classList.add('hide');
-        el('main').classList.remove('hide');
-        S = s; offset = s.serverNow - Date.now(); render();
-      } else if (s && s.ok) {
-        note(el('setupMsg'), 'Connected, but that presenter key is wrong. Run showHostKey() in the script editor.');
-      } else {
-        note(el('setupMsg'), 'No game answered at that URL.');
-      }
-    }).catch(function () {
-      note(el('setupMsg'), 'Could not reach that URL. Check the deployment is set to "Anyone".');
-    }).then(function () { el('connect').disabled = false; });
+    render();
   });
+}
 
-  if (API && KEY) {
-    el('setup').classList.add('hide');
-    el('main').classList.remove('hide');
-  }
-  loop();
-  document.addEventListener('visibilitychange', function () { if (!document.hidden) poll(); });
+el('connect').addEventListener('click', async () => {
+  const k = el('hkey').value.trim();
+  if (!k) { note(el('setupMsg'), 'Paste the presenter key'); return; }
+  el('connect').disabled = true;
+  try { await claim(k); note(el('setupMsg'), ''); }
+  catch (e) { note(el('setupMsg'), 'That key was refused. It is Clutch123 unless you changed the rules.'); }
+  el('connect').disabled = false;
+});
+el('hkey').addEventListener('keydown', e => { if (e.key === 'Enter') el('connect').click(); });
+
+(async function () {
+  let app;
+  try { app = initializeApp(firebaseConfig); }
+  catch (e) { note(el('setupMsg'), 'Firebase config is missing from this site.'); return; }
+  DB = getDatabase(app);
+  try { UID = (await signInAnonymously(getAuth(app))).user.uid; }
+  catch (e) { note(el('setupMsg'), 'Could not sign in: ' + (e && e.code ? e.code : e)); return; }
+  onValue(ref(DB, '.info/serverTimeOffset'), (s) => { offset = s.val() || 0; });
+  let saved = '';
+  try { saved = localStorage.getItem('mascotHostKey') || ''; } catch (e) {}
+  if (saved) { try { await claim(saved); } catch (e) {} }
 })();
+
 </script>
 </body>
 </html>

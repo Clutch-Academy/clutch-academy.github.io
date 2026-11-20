@@ -119,8 +119,8 @@ input::placeholder{color:#B9A9B2;font-weight:400}
 
   <!-- no API configured -->
   <section id="s-setup" class="card hide">
-    <h2>This link is missing its game address</h2>
-    <p>Scan the QR code on the presenter's screen instead — that link carries everything this page needs.</p>
+    <h2>Can't reach the game</h2>
+    <p>This page couldn't connect. Check you have signal, then reload. If it keeps failing, tell the presenter.</p>
   </section>
 
   <!-- join -->
@@ -206,322 +206,311 @@ input::placeholder{color:#B9A9B2;font-weight:400}
   <div class="foot" id="foot"></div>
 </div>
 
-<script>
-(function () {
-  'use strict';
+<script type="module">
+import { initializeApp } from "https://www.gstatic.com/firebasejs/11.10.0/firebase-app.js";
+import { getAuth, signInAnonymously } from "https://www.gstatic.com/firebasejs/11.10.0/firebase-auth.js";
+import { getDatabase, ref, child, push, onValue, update, set }
+  from "https://www.gstatic.com/firebasejs/11.10.0/firebase-database.js";
+import { firebaseConfig } from "/mascot-config.js";
 
-  /* ---------------------------------------------------------- config ---- */
-  // The QR carries ?api= (and ?pin=). We stash the address so a refresh still works.
-  var qs = new URLSearchParams(location.search);
-  var API = qs.get('api') || '';
-  var sid = qs.get('s') || '';
-  // Short form: just the Apps Script deployment id, which keeps the QR sparse.
-  if (!API && /^[A-Za-z0-9_-]{20,}$/.test(sid)) {
-    API = 'https://script.google.com/macros/s/' + sid + '/exec';
+/* No polling anywhere in this file. The database pushes; we react. */
+
+const el = (id) => document.getElementById(id);
+const SCREENS = ['s-setup','s-join','s-lobby','s-submit','s-submitted','s-vote','s-voted','s-results'];
+const show = (id) => SCREENS.forEach(s => el(s).classList.toggle('hide', s !== id));
+function note(node, text, kind) {
+  node.className = 'msg' + (text ? ' ' + (kind || 'err') : '');
+  node.textContent = text || '';
+}
+
+let DB = null, UID = null;
+let G = null;              // /game
+let round = null;
+let offset = 0;            // server clock minus ours, published by Firebase
+let joined = false, myNick = '', myEntryId = null, myVote = null;
+let entries = [], playerCount = 0, result = null;
+let pendingText = null;
+
+const now = () => Date.now() + offset;
+const deadline = () => (G && G.startedAt) ? G.startedAt + (G.submitSeconds || 60) * 1000 : 0;
+// Mirrors the security rules: the clock decides, not the presenter's laptop.
+const votingOpen = () => !!G && (G.stage === 'voting' || G.stage === 'runoff' ||
+  (G.stage === 'submitting' && deadline() && now() > deadline() + 2500));
+const phase = () => (G && G.stage === 'runoff') ? 'runoff' : 'main';
+
+try { myNick = localStorage.getItem('mascotNick') || ''; } catch (e) {}
+
+/* ---- subscriptions, opened and closed as the game moves ---------------- */
+const live = {};
+function watch(key, path, cb) {
+  if (live[key] && live[key].path === path) return;
+  if (live[key]) live[key].off();
+  live[key] = {
+    path,
+    off: onValue(ref(DB, path), (s) => cb(s.val()), () => {
+      // A denied listener is cancelled for good. Drop it and try again once
+      // the rules would let it through.
+      if (live[key] && live[key].path === path) { live[key] = null; }
+      setTimeout(() => { if (!live[key]) watch(key, path, cb); }, 1500);
+    })
+  };
+}
+function drop(key) { if (live[key]) { live[key].off(); live[key] = null; } }
+
+function subscriptions() {
+  if (round === null) return;
+  const base = 'rounds/' + round;
+  watch('players', base + '/playerIds', (v) => { playerCount = v ? Object.keys(v).length : 0; render(); });
+  if (joined) {
+    watch('mine', base + '/myEntry/' + UID, (v) => { myEntryId = v || null; render(); });
+    watch('vote', base + '/votes/' + phase() + '/' + UID, (v) => { myVote = v || null; render(); });
   }
-  if (API) { try { localStorage.setItem('mascotApi', API); } catch (e) {} }
-  if (!API) { try { API = localStorage.getItem('mascotApi') || ''; } catch (e) {} }
-  if (!API && window.MASCOT_API) API = window.MASCOT_API;
-
-  var TOKEN = '';
-  try { TOKEN = localStorage.getItem('mascotToken') || ''; } catch (e) {}
-
-  var el = function (id) { return document.getElementById(id); };
-  var screens = ['s-setup', 's-join', 's-lobby', 's-submit', 's-submitted', 's-vote', 's-voted', 's-results'];
-  function show(id) {
-    screens.forEach(function (s) { el(s).classList.toggle('hide', s !== id); });
-  }
-  function note(node, text, kind) {
-    node.className = 'msg' + (text ? ' ' + (kind || 'err') : '');
-    node.textContent = text || '';
-  }
-
-  /* ------------------------------------------------------------ api ----- */
-  // No Content-Type header on purpose: that keeps it a "simple" CORS request,
-  // so the browser never sends a preflight that Apps Script cannot answer.
-  function call(payload) {
-    return fetch(API, {
-      method: 'POST',
-      redirect: 'follow',
-      body: JSON.stringify(payload)
-    }).then(function (r) { return r.json(); });
-  }
-
-  /* ----------------------------------------------------------- state ---- */
-  var S = null;             // last state from the server
-  var offset = 0;           // serverNow - Date.now(), so the clock can't be fiddled with
-  var inFlight = false;
-  var imgVersion = -1;
-  var lastStage = '';
-  var pendingText = null;   // what the player typed but hasn't saved
-  var typingUntil = 0;
-
-  function serverNow() { return Date.now() + offset; }
-
-  function poll() {
-    if (inFlight || !API) return Promise.resolve();
-    inFlight = true;
-    return call({ action: 'state', token: TOKEN })
-      .then(function (s) {
-        if (s && s.ok) { offset = s.serverNow - Date.now(); S = s; render(); }
-      })
-      .catch(function () { /* a dropped poll is fine; the next one catches up */ })
-      .then(function () { inFlight = false; });
-  }
-
-  // How long to wait AFTER an answer lands before asking again. Apps Script
-  // round trips run 2-8s, so a fixed interval just stacks waiting on waiting.
-  // Poll hard only where the player is waiting on someone else.
-  function gap() {
-    if (!S) return 800;
-    switch (S.stage) {
-      case 'lobby':      return 800;    // waiting for the host to start
-      case 'submitting': return 3000;   // the countdown runs locally; nothing to learn
-      case 'voting':
-      case 'runoff':     return (S.me && S.me.hasVoted) ? 1500 : 3000;
-      case 'results':    return 6000;
-      default:           return 2000;
-    }
-  }
-  function loop() { poll().then(function () { setTimeout(loop, gap()); }); }
-
-  /* ------------------------------------------------------- the mascot --- */
-  function loadMascot(v) {
-    if (!v || v === imgVersion) return;
-    imgVersion = v;
-    call({ action: 'image', version: v }).then(function (r) {
-      if (!r || !r.ok || !r.dataUrl) return;
-      var box = el('mascot1');
-      box.innerHTML = '';
-      var img = new Image();
-      img.alt = 'The mascot you are naming';
-      img.src = r.dataUrl;
-      box.appendChild(img);
-    }).catch(function () {});
-  }
-
-  /* ---------------------------------------------------------- render ---- */
-  function render() {
-    if (!S) return;
-    var stage = S.stage;
-    var me = S.me;
-
-    if (S.imageVersion) loadMascot(S.imageVersion);
-
-    if (!me) {                       // not joined (or the round was restarted)
-      if (TOKEN && lastStage) {      // we were in and got reset
-        TOKEN = '';
-        try { localStorage.removeItem('mascotToken'); } catch (e) {}
-      }
-      show('s-join');
-      el('sub').textContent = stage === 'lobby'
-        ? 'Pick a name. Then pick a winner.'
-        : 'This round is already running.';
-      lastStage = stage;
-      return;
-    }
-
-    el('lobbyWho').textContent = 'Playing as ' + me.nickname;
-
-    if (stage === 'lobby') {
-      show('s-lobby');
-      el('lobbyCount').textContent = S.playerCount === 1
-        ? "You're the first one here."
-        : S.playerCount + ' people have joined so far.';
-    } else if (stage === 'submitting') {
-      show('s-submit');
-      tick();
-      if (pendingText === null && document.activeElement !== el('entry')) {
-        el('entry').value = me.myText || '';
-      }
-      el('subBtn').textContent = me.hasSubmitted ? 'Update my name' : 'Submit';
-    } else if (stage === 'voting' || stage === 'runoff') {
-      if (me.hasVoted) {
-        show('s-voted');
-        el('votedCount').textContent = S.voteCount + ' of ' + S.playerCount + ' votes are in.';
-      } else {
-        show('s-vote');
-        drawBallot();
-      }
-      el('voteTitle').textContent = stage === 'runoff' ? "It's a tie — vote again" : 'Vote for your favourite';
-      el('voteHint').textContent = stage === 'runoff'
-        ? 'These names finished level. One of them has to win.'
-        : "One vote each. You can't vote for your own, and nobody sees who voted for what.";
-    } else if (stage === 'results') {
-      show('s-results');
-      drawResults();
-    }
-    lastStage = stage;
-  }
-
-  /* --------------------------------------------------------- the clock -- */
-  function tick() {
-    if (!S || S.stage !== 'submitting' || !S.deadline) return;
-    var left = Math.max(0, S.deadline - serverNow());
-    var secs = Math.ceil(left / 1000);
-    el('subN').textContent = secs;
-    el('subTimer').classList.toggle('low', secs <= 10);
-    var total = (S.submitSeconds || 60) * 1000;
-    el('subBar').style.width = Math.max(0, Math.min(100, (left / total) * 100)) + '%';
-    var dead = left <= 0;
-    el('entry').disabled = dead;
-    el('subBtn').disabled = dead;
-    if (dead) el('subBtn').textContent = "Time's up";
-  }
-  setInterval(function () { if (S && S.stage === 'submitting') tick(); }, 200);
-
-  /* ----------------------------------------------------------- ballot --- */
-  function drawBallot() {
-    var box = el('ballot');
-    var sig = (S.entries || []).map(function (e) { return e.id; }).join('|') + '/' + S.stage;
-    if (box.dataset.sig === sig) return;      // don't rebuild under the player's thumb
-    box.dataset.sig = sig;
-    box.innerHTML = '';
-    (S.entries || []).forEach(function (e) {
-      var b = document.createElement('button');
-      b.className = 'opt' + (e.mine ? ' own' : '');
-      b.type = 'button';
-      var tick = document.createElement('span');
-      tick.className = 'tick';
-      tick.textContent = '✓';
-      b.appendChild(tick);
-      var t = document.createElement('span');
-      t.textContent = e.text;
-      b.appendChild(t);
-      if (e.mine) {
-        b.disabled = true;
-        var y = document.createElement('span');
-        y.className = 'yours';
-        y.textContent = 'Yours';
-        b.appendChild(y);
-      } else {
-        b.addEventListener('click', function () { castVote(e.id, b); });
-      }
-      box.appendChild(b);
+  if (votingOpen()) {
+    watch('entries', base + '/entries', (v) => {
+      entries = v ? Object.keys(v).map(id => ({ id, text: (v[id] || {}).text || '' })).sort((a, b) => a.id < b.id ? -1 : 1) : [];
+      render();
     });
-    if (!(S.entries || []).length) {
-      var p = document.createElement('p');
-      p.textContent = 'No names were submitted this round.';
-      box.appendChild(p);
-    }
-  }
+  } else { drop('entries'); entries = []; }
+  if (G && G.stage === 'results') {
+    watch('result', base + '/result', (v) => { result = v; render(); });
+  } else { drop('result'); result = null; }
+}
 
-  var voting = false;
-  function castVote(id, btn) {
-    if (voting) return;
-    voting = true;
-    Array.prototype.forEach.call(el('ballot').children, function (c) { c.classList.remove('chosen'); });
-    btn.classList.add('chosen');
-    note(el('voteMsg'), '');
-    call({ action: 'vote', token: TOKEN, entryId: id })
-      .then(function (r) {
-        if (r && r.ok) { poll(); }
-        else { btn.classList.remove('chosen'); note(el('voteMsg'), (r && r.error) || 'That did not go through'); poll(); }
-      })
-      .catch(function () {
-        btn.classList.remove('chosen');
-        note(el('voteMsg'), 'Connection hiccup — tap again');
-      })
-      .then(function () { voting = false; });
-  }
-
-  /* ---------------------------------------------------------- results --- */
-  function drawResults() {
-    var w = S.winner;
-    if (!w) {
-      el('winnerBox').classList.add('hide');
-      el('resNote').textContent = 'Nobody submitted a name this round.';
-      el('ranks').innerHTML = '';
-      return;
-    }
-    el('winnerBox').classList.remove('hide');
-    el('wName').textContent = w.text;
-    el('wBy').textContent = 'Submitted by ' + w.nickname;
-    var n = (w.decidedBy === 'runoff') ? w.runoffVotes : w.votes;
-    el('wVotes').textContent = n + (n === 1 ? ' vote' : ' votes')
-      + (w.decidedBy === 'runoff' ? ' in the runoff' : '')
-      + (w.decidedBy === 'coin-toss' ? ' · tie broken at random' : '');
-    el('youWon').classList.toggle('hide', !(S.me && S.me.nickname === w.nickname));
-
-    var box = el('ranks');
+/* ---- the mascot, fetched once per version ----------------------------- */
+let shownImage = -1;
+function mascot(v) {
+  if (!v || v === shownImage) return;
+  shownImage = v;
+  onValue(ref(DB, 'mascot/' + v), (s) => {
+    const url = s.val();
+    if (!url) return;
+    const box = el('mascot1');
     box.innerHTML = '';
-    (S.results || []).forEach(function (r, i) {
-      var row = document.createElement('div');
-      row.className = 'rank';
-      var pos = document.createElement('span'); pos.className = 'pos'; pos.textContent = (i + 1);
-      var t = document.createElement('span'); t.className = 't'; t.textContent = r.text;
-      var v = document.createElement('span'); v.className = 'v';
-      var c = (w.decidedBy === 'runoff' && r.runoffVotes) ? r.runoffVotes : r.votes;
-      v.textContent = c;
-      row.appendChild(pos); row.appendChild(t); row.appendChild(v);
-      box.appendChild(row);
-    });
+    const img = new Image();
+    img.alt = 'The mascot you are naming';
+    img.src = url;
+    box.appendChild(img);
+  }, () => {}, { onlyOnce: true });
+}
+
+/* ---- render ----------------------------------------------------------- */
+function render() {
+  if (!G) return;
+  if (G.imageVersion) mascot(G.imageVersion);
+
+  if (!joined) {
+    show('s-join');
+    el('sub').textContent = votingOpen() ? 'This round is already running.' : 'Pick a name. Then pick a winner.';
+    return;
   }
+  el('lobbyWho').textContent = 'Playing as ' + myNick;
 
-  /* ------------------------------------------------------------ join ---- */
-  el('joinBtn').addEventListener('click', function () {
-    var nick = el('nick').value.trim();
-    var pin = el('pin').value.trim();
-    if (!nick) { note(el('joinMsg'), 'Enter your name first'); return; }
-    if (!/^\d{4}$/.test(pin)) { note(el('joinMsg'), 'The PIN is four digits'); return; }
-    el('joinBtn').disabled = true;
-    el('joinBtn').textContent = 'Joining…';
-    call({ action: 'join', nickname: nick, pin: pin })
-      .then(function (r) {
-        if (r && r.ok) {
-          TOKEN = r.token;
-          try { localStorage.setItem('mascotToken', TOKEN); } catch (e) {}
-          note(el('joinMsg'), '');
-          poll();
-        } else {
-          note(el('joinMsg'), r && r.error === 'bad_pin' ? "That PIN doesn't match the screen" : (r && r.error) || 'Could not join');
-        }
-      })
-      .catch(function () { note(el('joinMsg'), 'No connection — check the wifi and try again'); })
-      .then(function () {
-        el('joinBtn').disabled = false;
-        el('joinBtn').textContent = 'Join';
-      });
-  });
-  el('pin').addEventListener('keydown', function (e) { if (e.key === 'Enter') el('joinBtn').click(); });
-  el('nick').addEventListener('keydown', function (e) { if (e.key === 'Enter') el('pin').focus(); });
+  if (G.stage === 'results') {
+    show('s-results');
+    drawResults();
+  } else if (votingOpen()) {
+    if (myVote) {
+      show('s-voted');
+      el('votedCount').textContent = 'Waiting for the presenter to reveal the winner.';
+    } else {
+      show('s-vote');
+      drawBallot();
+    }
+    el('voteTitle').textContent = G.stage === 'runoff' ? "It's a tie — vote again" : 'Vote for your favourite';
+    el('voteHint').textContent = G.stage === 'runoff'
+      ? 'These names finished level. One of them has to win.'
+      : "One vote each. You can't vote for your own, and nobody sees who voted for what.";
+  } else if (G.stage === 'submitting') {
+    show('s-submit');
+    tick();
+    if (pendingText === null && document.activeElement !== el('entry') && myEntryId) {
+      const mineRow = entries.find(e => e.id === myEntryId);
+      if (mineRow && !el('entry').value) el('entry').value = mineRow.text;
+    }
+    el('subBtn').textContent = myEntryId ? 'Update my name' : 'Submit';
+  } else {
+    show('s-lobby');
+    el('lobbyCount').textContent = playerCount === 1
+      ? "You're the first one here."
+      : playerCount + ' people have joined so far.';
+  }
+}
 
-  /* ---------------------------------------------------------- submit ---- */
-  el('entry').addEventListener('input', function () {
-    pendingText = el('entry').value;
-    typingUntil = Date.now() + 4000;
-  });
-  el('subBtn').addEventListener('click', function () {
-    var text = el('entry').value.trim();
-    if (!text) { note(el('subMsg'), 'Type a name first'); return; }
-    el('subBtn').disabled = true;
-    call({ action: 'submit', token: TOKEN, text: text })
-      .then(function (r) {
-        if (r && r.ok) {
-          pendingText = null;
-          note(el('subMsg'), 'Saved. Change it any time before the clock runs out.', 'good');
-          poll();
-        } else {
-          note(el('subMsg'), (r && r.error) || 'Could not save that');
-          poll();
-        }
-      })
-      .catch(function () { note(el('subMsg'), 'No connection — try once more'); })
-      .then(function () { el('subBtn').disabled = false; });
-  });
-  el('entry').addEventListener('keydown', function (e) { if (e.key === 'Enter') el('subBtn').click(); });
+function tick() {
+  if (!G || G.stage !== 'submitting' || !deadline()) return;
+  const left = Math.max(0, deadline() - now());
+  const secs = Math.ceil(left / 1000);
+  el('subN').textContent = secs;
+  el('subTimer').classList.toggle('low', secs <= 10);
+  el('subBar').style.width = Math.max(0, Math.min(100, (left / ((G.submitSeconds || 60) * 1000)) * 100)) + '%';
+  const done = left <= 0;
+  el('entry').disabled = done;
+  el('subBtn').disabled = done;
+  if (done) el('subBtn').textContent = "Time's up";
+}
+setInterval(() => {
+  if (!G) return;
+  if (G.stage === 'submitting') { tick(); if (votingOpen()) { subscriptions(); render(); } }
+}, 200);
 
-  /* ------------------------------------------------------------ boot ---- */
-  if (!API) { show('s-setup'); return; }
-  var qsPin = qs.get('pin');
+function drawBallot() {
+  const box = el('ballot');
+  const sig = entries.map(e => e.id).join('|') + '/' + G.stage;
+  if (box.dataset.sig === sig) return;
+  box.dataset.sig = sig;
+  box.innerHTML = '';
+  const pool = (G.stage === 'runoff' && G.runoff) ? entries.filter(e => G.runoff[e.id]) : entries;
+  pool.forEach(e => {
+    const b = document.createElement('button');
+    b.className = 'opt' + (e.id === myEntryId ? ' own' : '');
+    b.type = 'button';
+    const t = document.createElement('span');
+    t.className = 'tick'; t.textContent = '✓';
+    b.appendChild(t);
+    const s = document.createElement('span'); s.textContent = e.text; b.appendChild(s);
+    if (e.id === myEntryId) {
+      b.disabled = true;
+      const y = document.createElement('span'); y.className = 'yours'; y.textContent = 'Yours';
+      b.appendChild(y);
+    } else {
+      b.addEventListener('click', () => castVote(e.id, b));
+    }
+    box.appendChild(b);
+  });
+  if (!pool.length) {
+    const p = document.createElement('p');
+    p.textContent = 'No names were submitted this round.';
+    box.appendChild(p);
+  }
+}
+
+let voting = false;
+async function castVote(id, btn) {
+  if (voting) return;
+  voting = true;
+  Array.prototype.forEach.call(el('ballot').children, c => c.classList.remove('chosen'));
+  btn.classList.add('chosen');
+  note(el('voteMsg'), '');
+  try {
+    await set(ref(DB, 'rounds/' + round + '/votes/' + phase() + '/' + UID), id);
+  } catch (e) {
+    btn.classList.remove('chosen');
+    note(el('voteMsg'), 'That vote was refused — you may have voted already.');
+  }
+  voting = false;
+}
+
+function drawResults() {
+  if (!result || !result.winner) {
+    el('winnerBox').classList.add('hide');
+    el('resNote').textContent = result ? 'Nobody submitted a name this round.' : 'Counting…';
+    el('ranks').innerHTML = '';
+    return;
+  }
+  const w = result.winner;
+  el('winnerBox').classList.remove('hide');
+  el('wName').textContent = w.text;
+  el('wBy').textContent = 'Submitted by ' + w.nickname;
+  el('wVotes').textContent = w.votes + (w.votes === 1 ? ' vote' : ' votes')
+    + (w.decidedBy === 'runoff' ? ' in the runoff' : '')
+    + (w.decidedBy === 'coin-toss' ? ' · tie broken at random' : '');
+  el('youWon').classList.toggle('hide', !(myNick && w.nickname === myNick));
+  const box = el('ranks'); box.innerHTML = '';
+  (result.table || []).forEach((r, i) => {
+    const row = document.createElement('div'); row.className = 'rank';
+    const a = document.createElement('span'); a.className = 'pos'; a.textContent = i + 1;
+    const b = document.createElement('span'); b.className = 't'; b.textContent = r.text;
+    const c = document.createElement('span'); c.className = 'v'; c.textContent = r.votes;
+    row.appendChild(a); row.appendChild(b); row.appendChild(c);
+    box.appendChild(row);
+  });
+}
+
+/* ---- join and submit --------------------------------------------------- */
+el('joinBtn').addEventListener('click', async () => {
+  const nick = el('nick').value.trim();
+  const pin = el('pin').value.trim();
+  if (!nick) { note(el('joinMsg'), 'Enter your name first'); return; }
+  if (!/^\d{4}$/.test(pin)) { note(el('joinMsg'), 'The PIN is four digits'); return; }
+  el('joinBtn').disabled = true; el('joinBtn').textContent = 'Joining…';
+  try {
+    await update(ref(DB, 'rounds/' + round), {
+      ['playerIds/' + UID]: true,
+      ['players/' + UID]: { nick, pin }
+    });
+    myNick = nick;
+    try { localStorage.setItem('mascotNick', nick); } catch (e) {}
+    joined = true;
+    note(el('joinMsg'), '');
+    subscriptions(); render();
+  } catch (e) {
+    note(el('joinMsg'), votingOpen()
+      ? 'Voting has started — joining is closed'
+      : "That PIN doesn't match the screen");
+  }
+  el('joinBtn').disabled = false; el('joinBtn').textContent = 'Join';
+});
+el('nick').addEventListener('keydown', e => { if (e.key === 'Enter') el('pin').focus(); });
+el('pin').addEventListener('keydown', e => { if (e.key === 'Enter') el('joinBtn').click(); });
+
+el('entry').addEventListener('input', () => { pendingText = el('entry').value; });
+el('subBtn').addEventListener('click', async () => {
+  const text = el('entry').value.trim();
+  if (!text) { note(el('subMsg'), 'Type a name first'); return; }
+  el('subBtn').disabled = true;
+  try {
+    const eid = myEntryId || push(child(ref(DB), 'rounds/' + round + '/entries')).key;
+    await update(ref(DB, 'rounds/' + round), {
+      ['entries/' + eid]: { text },
+      ['entryOwner/' + eid]: UID,
+      ['myEntry/' + UID]: eid
+    });
+    pendingText = null;
+    note(el('subMsg'), 'Saved. Change it any time before the clock runs out.', 'good');
+  } catch (e) {
+    note(el('subMsg'), votingOpen() ? 'Time is up' : 'That did not save — try once more');
+  }
+  el('subBtn').disabled = false;
+});
+el('entry').addEventListener('keydown', e => { if (e.key === 'Enter') el('subBtn').click(); });
+
+/* ---- boot -------------------------------------------------------------- */
+(async function () {
+  const qs = new URLSearchParams(location.search);
+  const qsPin = qs.get('pin');
   if (qsPin) el('pin').value = String(qsPin).slice(0, 4);
-  show(TOKEN ? 's-lobby' : 's-join');
+  if (myNick) el('nick').value = myNick;
 
-  loop();
-  // A phone that slept or switched apps catches up the moment it comes back.
-  document.addEventListener('visibilitychange', function () { if (!document.hidden) poll(); });
-  window.addEventListener('focus', poll);
+  let app;
+  try { app = initializeApp(firebaseConfig); }
+  catch (e) { show('s-setup'); return; }
+  DB = getDatabase(app);
+
+  try {
+    const cred = await signInAnonymously(getAuth(app));
+    UID = cred.user.uid;
+  } catch (e) { show('s-setup'); return; }
+
+  onValue(ref(DB, '.info/serverTimeOffset'), (s) => { offset = s.val() || 0; });
+
+  onValue(ref(DB, 'game'), (s) => {
+    G = s.val() || { stage: 'lobby', round: '1' };
+    if (G.round !== round) {          // a new round wipes everything local
+      round = G.round;
+      joined = false; myEntryId = null; myVote = null; entries = []; result = null;
+      pendingText = null; el('entry').value = '';
+      ['players','mine','vote','entries','result'].forEach(drop);
+      watch('players', 'rounds/' + round + '/playerIds', (v) => {
+        playerCount = v ? Object.keys(v).length : 0;
+        if (UID && v && v[UID]) { if (!joined) { joined = true; subscriptions(); } }
+        render();
+      });
+    }
+    subscriptions();
+    render();
+  });
 })();
+
 </script>
 </body>
 </html>

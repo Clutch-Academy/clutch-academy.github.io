@@ -1,0 +1,107 @@
+{
+  "rules": {
+    ".read": false,
+    ".write": false,
+    "game": {
+      ".read": true,
+      ".write": "auth != null && root.child('hostClaims').child(auth.uid).exists()",
+      "round": {
+        ".validate": "newData.isString()"
+      },
+      "stage": {
+        ".validate": "newData.val() === 'lobby' || newData.val() === 'submitting' || newData.val() === 'voting' || newData.val() === 'runoff' || newData.val() === 'results'"
+      },
+      "startedAt": {
+        ".validate": "newData.isNumber()"
+      },
+      "submitSeconds": {
+        ".validate": "newData.isNumber() && newData.val() >= 5 && newData.val() <= 600"
+      },
+      "imageVersion": {
+        ".validate": "newData.isNumber()"
+      },
+      "runoff": {
+        "$eid": {
+          ".validate": "newData.val() === true"
+        }
+      },
+      "$other": {
+        ".validate": false
+      }
+    },
+    "hostClaims": {
+      "$uid": {
+        ".read": false,
+        ".write": "auth != null && auth.uid === $uid",
+        ".validate": "newData.val() === 'Clutch123'"
+      }
+    },
+    "mascot": {
+      ".read": true,
+      "$version": {
+        ".write": "auth != null && root.child('hostClaims').child(auth.uid).exists()",
+        ".validate": "newData.isString() && newData.val().length < 400000"
+      }
+    },
+    "rounds": {
+      "$r": {
+        "playerIds": {
+          ".read": true,
+          "$uid": {
+            ".write": "auth != null && auth.uid === $uid && !data.exists() && $r === root.child('game/round').val() && (root.child('game/stage').val() === 'lobby' || (root.child('game/stage').val() === 'submitting' && root.child('game/startedAt').exists() && root.child('game/submitSeconds').exists() && now < (root.child('game/startedAt').val() + (root.child('game/submitSeconds').val() * 1000) + 2500)))",
+            ".validate": "newData.val() === true"
+          }
+        },
+        "players": {
+          ".read": "auth != null && root.child('hostClaims').child(auth.uid).exists()",
+          "$uid": {
+            ".write": "auth != null && auth.uid === $uid && !data.exists() && $r === root.child('game/round').val() && (root.child('game/stage').val() === 'lobby' || (root.child('game/stage').val() === 'submitting' && root.child('game/startedAt').exists() && root.child('game/submitSeconds').exists() && now < (root.child('game/startedAt').val() + (root.child('game/submitSeconds').val() * 1000) + 2500)))",
+            ".validate": "newData.hasChildren(['nick','pin']) && newData.child('nick').isString() && newData.child('nick').val().length > 0 && newData.child('nick').val().length <= 24 && newData.child('pin').val() === '1234'",
+            "$f": {
+              ".validate": "$f === 'nick' || $f === 'pin'"
+            }
+          }
+        },
+        "entries": {
+          ".read": "(root.child('game/stage').val() === 'voting' || root.child('game/stage').val() === 'runoff' || (root.child('game/stage').val() === 'submitting' && root.child('game/startedAt').exists() && root.child('game/submitSeconds').exists() && now > (root.child('game/startedAt').val() + (root.child('game/submitSeconds').val() * 1000) + 2500))) || (auth != null && root.child('hostClaims').child(auth.uid).exists())",
+          "$eid": {
+            ".write": "auth != null && (root.child('game/stage').val() === 'submitting' && root.child('game/startedAt').exists() && root.child('game/submitSeconds').exists() && now < (root.child('game/startedAt').val() + (root.child('game/submitSeconds').val() * 1000) + 2500)) && $r === root.child('game/round').val() && newData.parent().parent().child('myEntry').child(auth.uid).val() === $eid && newData.parent().parent().child('entryOwner').child($eid).val() === auth.uid",
+            ".validate": "newData.hasChildren(['text']) && newData.child('text').isString() && newData.child('text').val().length > 0 && newData.child('text').val().length <= 60",
+            "$f": {
+              ".validate": "$f === 'text'"
+            }
+          }
+        },
+        "entryOwner": {
+          ".read": "auth != null && root.child('hostClaims').child(auth.uid).exists()",
+          "$eid": {
+            ".write": "auth != null && (root.child('game/stage').val() === 'submitting' && root.child('game/startedAt').exists() && root.child('game/submitSeconds').exists() && now < (root.child('game/startedAt').val() + (root.child('game/submitSeconds').val() * 1000) + 2500)) && $r === root.child('game/round').val() && newData.val() === auth.uid && (!data.exists() || data.val() === auth.uid)",
+            ".validate": "newData.val() === auth.uid"
+          }
+        },
+        "myEntry": {
+          "$uid": {
+            ".read": "auth != null && auth.uid === $uid",
+            ".write": "auth != null && auth.uid === $uid && (root.child('game/stage').val() === 'submitting' && root.child('game/startedAt').exists() && root.child('game/submitSeconds').exists() && now < (root.child('game/startedAt').val() + (root.child('game/submitSeconds').val() * 1000) + 2500)) && $r === root.child('game/round').val() && (!data.exists() || data.val() === newData.val())",
+            ".validate": "newData.isString()"
+          }
+        },
+        "votes": {
+          ".read": "auth != null && root.child('hostClaims').child(auth.uid).exists()",
+          "$phase": {
+            ".validate": "$phase === 'main' || $phase === 'runoff'",
+            "$uid": {
+              ".read": "auth != null && auth.uid === $uid",
+              ".write": "auth != null && auth.uid === $uid && !data.exists() && $r === root.child('game/round').val() && (root.child('game/stage').val() === 'voting' || root.child('game/stage').val() === 'runoff' || (root.child('game/stage').val() === 'submitting' && root.child('game/startedAt').exists() && root.child('game/submitSeconds').exists() && now > (root.child('game/startedAt').val() + (root.child('game/submitSeconds').val() * 1000) + 2500))) && root.child('rounds').child($r).child('entries').child(newData.val()).exists() && root.child('rounds').child($r).child('entryOwner').child(newData.val()).val() !== auth.uid && ($phase === 'main' || root.child('game/runoff').child(newData.val()).exists())",
+              ".validate": "newData.isString()"
+            }
+          }
+        },
+        "result": {
+          ".read": true,
+          ".write": "auth != null && root.child('hostClaims').child(auth.uid).exists()"
+        }
+      }
+    }
+  }
+}

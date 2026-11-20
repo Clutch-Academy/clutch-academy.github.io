@@ -223,7 +223,7 @@ function note(node, text, kind) {
   node.textContent = text || '';
 }
 
-const PIN = '1234';
+let PIN = '----';   // read from the database once unlocked
 let DB = null, UID = null, G = null, round = null, offset = 0;
 let playerIds = {}, players = {}, entriesMap = {}, owners = {}, votes = {};
 let shownStage = '';
@@ -561,6 +561,12 @@ async function claim(key) {
   try { localStorage.setItem('mascotHostKey', key); } catch (e) {}
   el('setup').classList.add('hide');
   el('main').classList.remove('hide');
+  watch('pin', 'secret/pin', (v) => {
+    PIN = v || '----';
+    if (!v) note(el('actMsg'), 'No PIN is set. Add secret/pin in the Firebase console Data tab.');
+    qrFor = '';            // rebuild the QR now the real PIN is known
+    render();
+  });
   watch('game', 'game', (v) => {
     G = v || { stage: 'lobby', round: '1' };
     if (G.round !== round) {
@@ -577,7 +583,7 @@ el('connect').addEventListener('click', async () => {
   if (!k) { note(el('setupMsg'), 'Paste the presenter key'); return; }
   el('connect').disabled = true;
   try { await claim(k); note(el('setupMsg'), ''); }
-  catch (e) { note(el('setupMsg'), 'That key was refused. It is Clutch123 unless you changed the rules.'); }
+  catch (e) { note(el('setupMsg'), 'That key was refused. It is the value at secret/hostKey in the Firebase console.'); }
   el('connect').disabled = false;
 });
 el('hkey').addEventListener('keydown', e => { if (e.key === 'Enter') el('connect').click(); });

@@ -8,7 +8,9 @@ to someone else, without asking me.
 | <https://clutch-academy.github.io/mascot-host/> | You, on the presentation laptop |
 | <https://clutch-academy.github.io/mascot/> | The room — they get there by scanning your QR |
 
-**Game PIN `1234` · Presenter key `Clutch123`**
+**The PIN and the presenter key are not in this repo.** They live in the database at
+`secret/pin` and `secret/hostKey`, and can only be set from the Firebase console
+(Realtime Database → Data). No client can read `secret/hostKey`; only the rules can.
 
 ## Running it on the day
 
@@ -58,8 +60,8 @@ Start and Close buttons are hints, not the thing holding it together.
 5. **Project settings → Your apps → Web (`</>`)** → register → copy the `firebaseConfig`
    into `mascot-config.js`. That file is public on purpose; the rules are the protection.
 
-To change the PIN or the presenter key, edit the literals `'1234'` and `'Clutch123'` in
-`firebase/database.rules.json`, republish, and update `PIN` in `mascot-host.html`.
+To change the PIN or the presenter key, edit `secret/pin` or `secret/hostKey` in the
+Firebase console Data tab. Nothing in this repo changes and nothing redeploys.
 
 ## Changing the pages
 
@@ -69,9 +71,10 @@ deploy step and no versions to manage.
 
 ## Known limits
 
-- **The PIN and presenter key are guessable on purpose.** Anyone with the URL could
-  enter `Clutch123` and drive the game. Fine for a room of colleagues; don't post the
-  link publicly and don't reuse that key anywhere that matters.
+- **Pick a real presenter key.** Anyone with it can drive the game. It is never in this
+  repo, so it only leaks if you share it. Don't reuse a password you use elsewhere.
+- **The PIN is public by design** — it is projected on screen. It only stops passers-by,
+  not a determined person.
 - **Two browsers on one phone are two players.** Anonymous sign-in is per browser
   profile, so someone determined could vote twice. Joining locks once voting opens,
   which is the practical mitigation.

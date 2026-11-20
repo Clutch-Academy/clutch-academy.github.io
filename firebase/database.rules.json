@@ -33,7 +33,7 @@
       "$uid": {
         ".read": false,
         ".write": "auth != null && auth.uid === $uid",
-        ".validate": "newData.val() === 'Clutch123'"
+        ".validate": "root.child('secret/hostKey').exists() && newData.val() === root.child('secret/hostKey').val()"
       }
     },
     "mascot": {
@@ -56,7 +56,7 @@
           ".read": "auth != null && root.child('hostClaims').child(auth.uid).exists()",
           "$uid": {
             ".write": "auth != null && auth.uid === $uid && !data.exists() && $r === root.child('game/round').val() && (root.child('game/stage').val() === 'lobby' || (root.child('game/stage').val() === 'submitting' && root.child('game/startedAt').exists() && root.child('game/submitSeconds').exists() && now < (root.child('game/startedAt').val() + (root.child('game/submitSeconds').val() * 1000) + 2500)))",
-            ".validate": "newData.hasChildren(['nick','pin']) && newData.child('nick').isString() && newData.child('nick').val().length > 0 && newData.child('nick').val().length <= 24 && newData.child('pin').val() === '1234'",
+            ".validate": "newData.hasChildren(['nick','pin']) && newData.child('nick').isString() && newData.child('nick').val().length > 0 && newData.child('nick').val().length <= 24 && newData.child('pin').val() === root.child('secret/pin').val()",
             "$f": {
               ".validate": "$f === 'nick' || $f === 'pin'"
             }
@@ -101,6 +101,13 @@
           ".read": true,
           ".write": "auth != null && root.child('hostClaims').child(auth.uid).exists()"
         }
+      }
+    },
+    "secret": {
+      ".read": false,
+      ".write": false,
+      "pin": {
+        ".read": "auth != null && root.child('hostClaims').child(auth.uid).exists()"
       }
     }
   }
